@@ -187,6 +187,22 @@ tolerated and ignored, so keys stay flat.
 | `SQL_ECHO` | Print all SQL queries to stdout (`true`/`false`) | `false` |
 | `DEBUG` | Disable HTML/CSS/JS minification | `false` |
 
+## Releases
+
+`.github/workflows/release.yml` runs on every push to `main`: it bumps the minor
+version from the newest `vX.Y.Z` tag (first release is `v0.1.0`), cross-compiles
+linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64 from a
+single ubuntu runner, and publishes a GitHub release with archives and
+`SHA256SUMS`. `[skip release]` in the merge commit message skips it.
+
+Two things the released binaries depend on:
+- `app/tzdata.go` embeds the IANA database. Without it the binary panics at init on
+  any system with no `/usr/share/zoneinfo` — notably Windows.
+- `CGO_ENABLED=0` is what makes one runner enough. A CGO SQLite driver would force
+  native runners per platform.
+
+`main.version` is stamped with `-ldflags -X`; unreleased builds report `dev`.
+
 ## Development
 
 ```bash

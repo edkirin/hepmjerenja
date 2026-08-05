@@ -1,4 +1,5 @@
 /build
+/dist
 /main-dev
 /tmp
 /config.yaml
