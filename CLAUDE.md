@@ -194,6 +194,13 @@ with real environment variables taking precedence over both (`loadConfigFile` in
 config.go). The format is `KEY=value`; `;` comments and `[section]` headers are
 tolerated and ignored, so keys stay flat.
 
+Windows editors make three things necessary, all handled in `stripINIDecorations` /
+`rejectedEncoding`: CRLF endings are stripped per line, a leading UTF-8 BOM is
+removed (it would otherwise become part of the first key and invalidate the whole
+file), and UTF-16 is rejected with a message telling the user to save as UTF-8.
+`.gitattributes` keeps the repo in LF; the release workflow converts the text files
+to CRLF inside the Windows archive only.
+
 | Variable | Description | Default |
 |---|---|---|
 | `DB_PATH` | SQLite database file | `./data/hepmjerenja.db` |

@@ -102,6 +102,13 @@ jobs:
             cp README.md LICENSE config.ini.example pkg/
 
             if [ "$goos" = windows ]; then
+              # Convert the text files to CRLF: Windows users open config.ini in
+              # Notepad, and an LF-only file shows up there as one long line on
+              # older builds. The parser accepts either ending, so this is purely
+              # about readability.
+              for text in README.md LICENSE config.ini.example; do
+                sed -i 's/$/\r/' "pkg/$text"
+              done
               (cd pkg && zip -q "../dist/${name}.zip" ./*)
             else
               tar -czf "dist/${name}.tar.gz" -C pkg .
