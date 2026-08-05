@@ -59,13 +59,31 @@ before the migration.
 Queries convert a stored epoch with `datetime(ts,'unixepoch','localtime')`, which
 reads the process `TZ` — `pinTimezone()` in main.go sets it to `AppTimezone`
 (Europe/Zagreb) so the result never depends on the host. The reusable fragments
-live at the top of `repository.go`: `localTS`, `localMonthKey`, `localYearKey`,
-`localDayNum`, `localMonthNum`, `localHourNum`, `localOffsetSeconds`, `isVT`.
+live at the top of `repository.go`: `localTS`, `localFields`, `isVTFromLocal`,
+`localMonthNum`, `readingsInRange`, plus `monthRange`/`yearRange` and the
+`monthKey`/`yearKey` string helpers.
 
-`localOffsetSeconds` is the replacement for PostgreSQL's
+`localFields` carries `offset_seconds`, the replacement for PostgreSQL's
 `ts AT TIME ZONE 'Europe/Zagreb' - ts AT TIME ZONE 'UTC'`: re-reading the local
 wall-clock text as UTC and subtracting the epoch yields 3600 (CET) or 7200 (CEST),
-which is what `isVT` keys the tariff window off.
+which is what `isVTFromLocal` keys the tariff window off.
+
+**Two rules keep the reading queries fast.** `localtime` runs through the driver's
+libc — negligible on glibc, but slow in the pure-Go emulation the Windows build
+uses, where a month switch used to take one to two seconds.
+
+1. **Filter `meter_readings` by epoch range, never by converted value.** Use
+   `readingsInRange` with bounds from `monthRange`/`yearRange` (computed in Go, so
+   DST-correct). `strftime(...localtime...) = '2026-07'` cannot use the
+   `(metering_point_code, timestamp)` index, so it scans every row of the table.
+2. **Convert each row once.** Select `localFields` in an inner subquery and derive
+   day/hour from the resulting `local` text. Calling `datetime(...)` inside each
+   expression multiplied the work by five.
+
+Together these cut a month switch from ~248,000 localtime calls to ~12,000
+(measured: 332 ms → 116 ms on Linux; the Windows gain is larger). The
+`daily_aggregates` and `daily_insolation` tables hold one row per day, so they
+still filter with `substr(date,1,7)` / `substr(date,1,4)` and `monthKey`/`yearKey`.
 
 ### `metering_points`
 - `code` TEXT PK — HEP "Šifra"
@@ -175,6 +193,13 @@ Settings come from `config.ini` in the working directory, falling back to `.env`
 with real environment variables taking precedence over both (`loadConfigFile` in
 config.go). The format is `KEY=value`; `;` comments and `[section]` headers are
 tolerated and ignored, so keys stay flat.
+
+Windows editors make three things necessary, all handled in `stripINIDecorations` /
+`rejectedEncoding`: CRLF endings are stripped per line, a leading UTF-8 BOM is
+removed (it would otherwise become part of the first key and invalidate the whole
+file), and UTF-16 is rejected with a message telling the user to save as UTF-8.
+`.gitattributes` keeps the repo in LF; the release workflow converts the text files
+to CRLF inside the Windows archive only.
 
 | Variable | Description | Default |
 |---|---|---|

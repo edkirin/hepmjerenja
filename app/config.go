@@ -135,6 +135,10 @@ func loadConfigFile() (string, error) {
 			continue // missing or unreadable: try the next candidate
 		}
 
+		if enc := rejectedEncoding(raw); enc != "" {
+			return path, fmt.Errorf("%s is %s; save it as UTF-8 (Notepad: Save as → Encoding: UTF-8)", path, enc)
+		}
+
 		values, err := godotenv.Unmarshal(stripINIDecorations(string(raw)))
 		if err != nil {
 			return path, fmt.Errorf("parse %s: %w", path, err)
@@ -150,12 +154,21 @@ func loadConfigFile() (string, error) {
 	return "", nil
 }
 
-// stripINIDecorations drops the two pieces of .ini syntax godotenv does not
-// understand — `[section]` headers and `;` comments — and leaves everything else,
-// including `#` comments, exactly as it was.
+// stripINIDecorations drops what godotenv cannot read: a leading UTF-8
+// byte-order mark, `[section]` headers and `;` comments. Everything else,
+// including `#` comments, is left exactly as it was.
+//
+// The BOM matters on Windows: saving the file from Notepad as "UTF-8 with BOM"
+// prepends one, and it would otherwise become part of the first key's name — the
+// parser then rejects the whole file and every setting silently falls back to its
+// default. Trailing carriage returns from CRLF files are removed here as well, so
+// correctness does not depend on godotenv normalising line endings itself.
 func stripINIDecorations(contents string) string {
+	contents = strings.TrimPrefix(contents, "\ufeff")
+
 	var kept strings.Builder
 	for _, line := range strings.Split(contents, "\n") {
+		line = strings.TrimSuffix(line, "\r")
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, ";") {
 			continue
@@ -164,4 +177,19 @@ func stripINIDecorations(contents string) string {
 		kept.WriteByte('\n')
 	}
 	return kept.String()
+}
+
+// rejectedEncoding names the encoding of a settings file that cannot be read at
+// all, or "" when the file looks like UTF-8 (or ASCII). Notepad's "Save as" offers
+// UTF-16, which would otherwise fail with a parse error mentioning a stray
+// character — this turns that into an instruction the user can act on.
+func rejectedEncoding(raw []byte) string {
+	switch {
+	case len(raw) >= 2 && raw[0] == 0xFF && raw[1] == 0xFE:
+		return "UTF-16 LE encoded"
+	case len(raw) >= 2 && raw[0] == 0xFE && raw[1] == 0xFF:
+		return "UTF-16 BE encoded"
+	default:
+		return ""
+	}
 }

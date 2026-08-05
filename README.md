@@ -135,6 +135,11 @@ tim vlasnikom, tako da montirani volume naslijedi prava pisanja.
 Postavke se čitaju iz datoteke `config.ini` u korijenu projekta ili iz varijabli
 okoline. Obavezni su samo HEP pristupni podaci.
 
+Datoteku možete uređivati bilo kojim editorom, uključujući Notepad: aplikacija
+prihvaća i Windows (CRLF) i Unix (LF) prijelome redova te UTF-8 s oznakom BOM.
+Jedino ne smije biti zapisana kao UTF-16 („Unicode" u Notepadovom *Save as*) — u
+tom slučaju aplikacija to javi u dnevniku i traži UTF-8.
+
 Format je `KEY=vrijednost`, jedna postavka po retku — isto kao `.env` datoteka:
 
 ```ini
