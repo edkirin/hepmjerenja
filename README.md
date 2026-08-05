@@ -41,6 +41,35 @@ poslužitelj baze.
 
 ## Instalacija
 
+### Gotova binarna datoteka (najlakše)
+
+Na stranici [Releases](https://github.com/edkirin/hepmjerenja/releases) preuzmite
+arhivu za svoj sustav:
+
+| Sustav | Datoteka |
+|---|---|
+| Linux (Intel/AMD) | `hepmjerenja_vX.Y.Z_linux_amd64.tar.gz` |
+| Linux (ARM, npr. Raspberry Pi) | `hepmjerenja_vX.Y.Z_linux_arm64.tar.gz` |
+| macOS (Apple Silicon) | `hepmjerenja_vX.Y.Z_darwin_arm64.tar.gz` |
+| macOS (Intel) | `hepmjerenja_vX.Y.Z_darwin_amd64.tar.gz` |
+| Windows | `hepmjerenja_vX.Y.Z_windows_amd64.zip` |
+
+```bash
+tar -xzf hepmjerenja_vX.Y.Z_linux_amd64.tar.gz
+cp config.ini.example config.ini
+# u config.ini upišite HEP_USERNAME i HEP_PASSWORD
+./hepmjerenja
+```
+
+Aplikacija ne traži ništa dodatno — baza podataka, migracije, web stranice i baza
+vremenskih zona ugrađene su u samu binarnu datoteku.
+
+Datoteke nisu digitalno potpisane, pa ih sustav može zaustaviti: na macOS-u
+pokrenite `xattr -d com.apple.quarantine hepmjerenja`, a na Windowsu u SmartScreen
+dijalogu odaberite *More info → Run anyway*. Kontrolne sume su u `SHA256SUMS`.
+
+Verziju provjerite s `hepmjerenja help`.
+
 ### Iz izvornog koda
 
 ```bash
@@ -331,6 +360,20 @@ make run                # air, automatsko ponovno pokretanje
 templ generate          # obavezno nakon izmjene .templ datoteka
 go build ./... && go vet ./...
 ```
+
+### Izdavanje verzija
+
+Spajanjem pull requesta u `main` pokreće se GitHub Actions workflow
+(`.github/workflows/release.yml`) koji:
+
+1. podigne *minor* verziju u odnosu na zadnju `vX.Y.Z` oznaku (bez oznaka počinje
+   od `v0.1.0`),
+2. prevede binarne datoteke za Linux, macOS i Windows (`CGO_ENABLED=0`, pa se svih
+   pet kombinacija gradi na jednom Linux runneru),
+3. objavi GitHub release s arhivama, kontrolnim sumama i popisom promjena.
+
+Verzija se u binarnu datoteku upisuje kroz `-ldflags "-X main.version=…"`. Ako
+promjenu ne želite izdati, u commit poruku dodajte `[skip release]`.
 
 ## Licenca
 

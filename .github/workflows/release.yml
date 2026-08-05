@@ -1,0 +1,169 @@
+name: Release
+
+# Runs on every merge into main (a squash, merge or rebase commit all land here as
+# a push). Pushing the tag below does not re-trigger this workflow, because the
+# trigger is filtered to the main branch.
+on:
+  push:
+    branches: [main]
+
+# The job creates a tag and a GitHub release.
+permissions:
+  contents: write
+
+# Two runs must never race for the same next version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Escape hatch: put [skip release] in the merge commit message to land a change
+    # without cutting a version.
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out main with full history
+        uses: actions/checkout@v4
+        with:
+          # Tags are needed to work out the current version.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Work out the next version
+        id: version
+        run: |
+          set -euo pipefail
+
+          # Only vX.Y.Z tags count. --sort=-v:refname orders them numerically, so
+          # v0.10.0 sorts above v0.9.0.
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+
+          if [ -z "$latest" ]; then
+            next=v0.1.0
+          else
+            version=${latest#v}
+            major=${version%%.*}
+            rest=${version#*.}
+            minor=${rest%%.*}
+            next="v${major}.$((minor + 1)).0"
+          fi
+
+          echo "latest=${latest:-none}" >>"$GITHUB_OUTPUT"
+          echo "next=$next" >>"$GITHUB_OUTPUT"
+          echo "Previous version: ${latest:-none}" >>"$GITHUB_STEP_SUMMARY"
+          echo "New version: $next" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Generate templ templates
+        run: |
+          set -euo pipefail
+
+          # Install the CLI at exactly the version of the runtime pinned in go.mod:
+          # a mismatch can generate code referencing symbols the runtime lacks.
+          templ_version=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install "github.com/a-h/templ/cmd/templ@${templ_version}"
+          templ generate ./app/templates/
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build binaries
+        env:
+          VERSION: ${{ steps.version.outputs.next }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          # CGO stays off — the SQLite driver is pure Go (modernc.org/sqlite), so
+          # every target cross-compiles from this single runner. Keep it that way:
+          # switching to a CGO driver would require native runners per platform.
+          export CGO_ENABLED=0
+
+          while read -r goos goarch; do
+            [ -z "$goos" ] && continue
+            name="hepmjerenja_${VERSION}_${goos}_${goarch}"
+            binary=hepmjerenja
+            [ "$goos" = windows ] && binary=hepmjerenja.exe
+
+            echo "::group::$name"
+            rm -rf pkg && mkdir -p pkg
+            GOOS="$goos" GOARCH="$goarch" go build \
+              -trimpath \
+              -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "pkg/$binary" ./app
+
+            # Ship the docs and the settings template next to the binary.
+            cp README.md LICENSE config.ini.example pkg/
+
+            if [ "$goos" = windows ]; then
+              (cd pkg && zip -q "../dist/${name}.zip" ./*)
+            else
+              tar -czf "dist/${name}.tar.gz" -C pkg .
+            fi
+            echo "::endgroup::"
+          done <<'TARGETS'
+          linux amd64
+          linux arm64
+          darwin amd64
+          darwin arm64
+          windows amd64
+          TARGETS
+
+          rm -rf pkg
+          (cd dist && sha256sum ./* > SHA256SUMS)
+          ls -l dist
+
+      - name: Tag and publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.next }}
+          PREVIOUS: ${{ steps.version.outputs.latest }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## Preuzimanje"
+            echo
+            echo "| Sustav | Datoteka |"
+            echo "|---|---|"
+            echo "| Linux (Intel/AMD) | \`hepmjerenja_${VERSION}_linux_amd64.tar.gz\` |"
+            echo "| Linux (ARM) | \`hepmjerenja_${VERSION}_linux_arm64.tar.gz\` |"
+            echo "| macOS (Apple Silicon) | \`hepmjerenja_${VERSION}_darwin_arm64.tar.gz\` |"
+            echo "| macOS (Intel) | \`hepmjerenja_${VERSION}_darwin_amd64.tar.gz\` |"
+            echo "| Windows | \`hepmjerenja_${VERSION}_windows_amd64.zip\` |"
+            echo
+            echo "Raspakirajte arhivu, kopirajte \`config.ini.example\` u \`config.ini\`,"
+            echo "upišite \`HEP_USERNAME\` i \`HEP_PASSWORD\` i pokrenite \`hepmjerenja\`."
+            echo "Aplikacija je na <http://localhost:8000>."
+            echo
+            echo "Binarne datoteke nisu potpisane, pa ih sustav može blokirati:"
+            echo "na macOS-u pokrenite \`xattr -d com.apple.quarantine hepmjerenja\`,"
+            echo "na Windowsu u SmartScreen dijalogu odaberite *More info → Run anyway*."
+            echo
+            echo "Kontrolne sume su u \`SHA256SUMS\`."
+            echo
+            echo "## Promjene"
+            echo
+          } > notes.md
+
+          if [ "$PREVIOUS" = none ]; then
+            git log --pretty='- %s (%h)' --no-merges >> notes.md
+          else
+            git log "${PREVIOUS}..HEAD" --pretty='- %s (%h)' --no-merges >> notes.md
+            echo >> notes.md
+            echo "**Sve promjene**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREVIOUS}...${VERSION}" >> notes.md
+          fi
+
+          # Creates the tag on this commit and uploads every archive.
+          gh release create "$VERSION" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --notes-file notes.md
+
+          echo "Released $VERSION" >>"$GITHUB_STEP_SUMMARY"

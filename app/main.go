@@ -16,6 +16,10 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 )
 
+// version is stamped at build time with -ldflags "-X main.version=v1.2.3".
+// Unreleased builds report "dev".
+var version = "dev"
+
 func main() {
 	pinTimezone()
 
@@ -28,6 +32,7 @@ func main() {
 			runMigrate(os.Args[2:])
 			return
 		case "help", "--help", "-h":
+			fmt.Printf("HEPMjerenja %s\n\n", version)
 			fmt.Println("Usage: hepmjerenja [command]")
 			fmt.Println()
 			fmt.Println("Commands:")
@@ -162,7 +167,7 @@ func main() {
 
 	// Start the HTTP server in a goroutine.
 	go func() {
-		logger.Info().Str("port", cfg.Port).Msg("Starting server")
+		logger.Info().Str("port", cfg.Port).Str("version", version).Msg("Starting server")
 		if err := e.Start(cfg.Port); err != nil {
 			logger.Info().Err(err).Msg("Server stopped")
 		}
