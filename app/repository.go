@@ -24,34 +24,61 @@ const (
 	// localTS is the reading timestamp as local wall-clock text.
 	localTS = `datetime(mr.timestamp,'unixepoch','localtime')`
 
-	// localMonthKey and localDayKey bucket a reading by local month / day.
-	localMonthKey = `strftime('%Y-%m', ` + localTS + `)`
-	localYearKey  = `strftime('%Y', ` + localTS + `)`
-	localDayNum   = `CAST(strftime('%d', ` + localTS + `) AS INTEGER)`
+	// localMonthNum buckets a reading by local month number, for yearly views.
 	localMonthNum = `CAST(strftime('%m', ` + localTS + `) AS INTEGER)`
-	localHourNum  = `CAST(strftime('%H', ` + localTS + `) AS INTEGER)`
 
-	// localOffsetSeconds is the local UTC offset for a reading: 3600 in CET, 7200
-	// in CEST. strftime('%s', <local wall-clock text>) re-reads that text as if it
-	// were UTC, so subtracting the true epoch yields the offset. This replaces the
-	// PostgreSQL "ts AT TIME ZONE 'Europe/Zagreb' - ts AT TIME ZONE 'UTC'" trick.
-	localOffsetSeconds = `(CAST(strftime('%s', ` + localTS + `) AS INTEGER) - mr.timestamp)`
+	// localFields is the projection every reading query starts from: it converts a
+	// row to local time exactly once. Converting inside each expression instead
+	// (day, hour, offset) multiplied the work by five, which is expensive because
+	// SQLite's 'localtime' goes through the driver's libc — cheap on glibc, slow in
+	// the pure-Go emulation used on Windows.
+	//
+	// offset_seconds is the local UTC offset: 3600 in CET, 7200 in CEST.
+	// strftime('%s', <local wall-clock text>) re-reads that text as if it were UTC,
+	// so subtracting the true epoch yields the offset. It replaces the PostgreSQL
+	// "ts AT TIME ZONE 'Europe/Zagreb' - ts AT TIME ZONE 'UTC'" trick.
+	localFields = localTS + ` AS local,
+		       (CAST(strftime('%s', ` + localTS + `) AS INTEGER) - mr.timestamp) AS offset_seconds`
 
-	// isVT flags the high tariff (VT) window, which shifts with DST:
+	// isVTFromLocal flags the high tariff (VT) window, which shifts with DST:
 	//   winter (CET, offset 3600): VT 07:00–21:00
 	//   summer (CEST, offset 7200): VT 08:00–22:00
-	isVT = `CASE WHEN ` + localOffsetSeconds + ` = 7200
-	            THEN ` + localHourNum + ` >= 8 AND ` + localHourNum + ` < 22
-	            ELSE ` + localHourNum + ` >= 7 AND ` + localHourNum + ` < 21
-	       END`
+	// It reads the columns produced by localFields, so no further conversion.
+	isVTFromLocal = `CASE WHEN offset_seconds = 7200
+	                     THEN local_hour >= 8 AND local_hour < 22
+	                     ELSE local_hour >= 7 AND local_hour < 21
+	                END`
+
+	// readingsInRange selects a half-open epoch range for one metering point. The
+	// bounds come from monthRange/yearRange, computed in Go, so the filter is a
+	// plain integer comparison that uses the (metering_point_code, timestamp)
+	// index instead of converting every row in the table to local time.
+	readingsInRange = `mr.metering_point_code = ? AND mr.timestamp >= ? AND mr.timestamp < ?`
 )
 
-// monthKey formats a year/month pair the way the local date keys above render it.
+// monthRange returns the half-open [from, to) epoch range covering one local
+// calendar month. Building it from local time makes it DST-correct: a March range
+// starts in CET and ends in CEST, and is exactly one hour shorter than the naive
+// arithmetic would suggest.
+func monthRange(year, month int) (int64, int64) {
+	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, zagrebLocation)
+	return start.Unix(), start.AddDate(0, 1, 0).Unix()
+}
+
+// yearRange returns the half-open [from, to) epoch range covering one local year.
+func yearRange(year int) (int64, int64) {
+	start := time.Date(year, time.January, 1, 0, 0, 0, 0, zagrebLocation)
+	return start.Unix(), start.AddDate(1, 0, 0).Unix()
+}
+
+// monthKey and yearKey format a prefix of the TEXT 'YYYY-MM-DD' dates stored in
+// daily_aggregates and daily_insolation, matched with substr(). Those tables hold
+// one row per day, so scanning them costs nothing worth optimising — unlike
+// meter_readings, which is filtered by epoch range instead.
 func monthKey(year, month int) string {
 	return fmt.Sprintf("%04d-%02d", year, month)
 }
 
-// yearKey formats a year the way the local year keys above render it.
 func yearKey(year int) string {
 	return fmt.Sprintf("%04d", year)
 }
@@ -156,24 +183,29 @@ func UpdateLastCollection(ctx context.Context, db *DB, code string) error {
 // (code, date, type) are overwritten so the aggregates stay in sync after each
 // collection cycle.
 func UpsertDailyAggregates(ctx context.Context, db *DB, code, meteringType string, year, month int) error {
+	from, to := monthRange(year, month)
 	// The WHERE clause before ON CONFLICT is required: SQLite cannot parse an
 	// upsert clause directly after a SELECT source.
 	_, err := db.Exec(ctx, `
 		INSERT INTO daily_aggregates (metering_point_code, date, type, kwh)
-		SELECT
-			mr.metering_point_code,
-			strftime('%Y-%m-%d', `+localTS+`),
-			mr.type,
-			-- 4 decimals matches the NUMERIC(14,4) column this replaced, so stored
-			-- aggregates keep the same precision they always had.
-			ROUND(SUM(mr.value * 0.25), 4)
-		FROM meter_readings mr
-		WHERE mr.metering_point_code = ?
-		  AND mr.type = ?
-		  AND `+localMonthKey+` = ?
-		GROUP BY strftime('%Y-%m-%d', `+localTS+`)
+		SELECT metering_point_code,
+		       local_date,
+		       type,
+		       -- 4 decimals matches the NUMERIC(14,4) column this replaced, so stored
+		       -- aggregates keep the same precision they always had.
+		       ROUND(SUM(value * 0.25), 4)
+		FROM (
+			SELECT mr.metering_point_code                    AS metering_point_code,
+			       strftime('%Y-%m-%d', `+localTS+`) AS local_date,
+			       mr.type                                   AS type,
+			       mr.value                                  AS value
+			FROM meter_readings mr
+			WHERE `+readingsInRange+`
+			  AND mr.type = ?
+		)
+		GROUP BY local_date
 		ON CONFLICT (metering_point_code, date, type) DO UPDATE SET kwh = excluded.kwh
-	`, code, meteringType, monthKey(year, month))
+	`, code, from, to, meteringType)
 	if err != nil {
 		return fmt.Errorf("upsert daily aggregates %s/%s %d-%02d: %w", code, meteringType, year, month, err)
 	}
@@ -266,22 +298,30 @@ func GetMeteringPointTariff(ctx context.Context, db *DB, code string) (string, e
 //   - Winter (CET, UTC+1): VT 07:00–21:00, NT 21:00–07:00
 //   - Summer (CEST, UTC+2): VT 08:00–22:00, NT 22:00–08:00
 func GetDailyVTNTForMonth(ctx context.Context, db *DB, code, meteringType string, year, month int) (vt, nt []DailyReading, err error) {
+	from, to := monthRange(year, month)
 	rows, err := db.Query(ctx, `
 		SELECT day,
 		       SUM(CASE WHEN is_vt THEN value * 0.25 ELSE 0 END),
 		       SUM(CASE WHEN NOT is_vt THEN value * 0.25 ELSE 0 END)
 		FROM (
-			SELECT `+localDayNum+` AS day,
-			       mr.value        AS value,
-			       `+isVT+`        AS is_vt
-			FROM meter_readings mr
-			WHERE mr.metering_point_code = ?
-			  AND mr.type = ?
-			  AND `+localMonthKey+` = ?
+			SELECT day, value, `+isVTFromLocal+` AS is_vt
+			FROM (
+				SELECT CAST(strftime('%d', local) AS INTEGER) AS day,
+				       CAST(strftime('%H', local) AS INTEGER) AS local_hour,
+				       offset_seconds,
+				       value
+				FROM (
+					SELECT `+localFields+`,
+					       mr.value AS value
+					FROM meter_readings mr
+					WHERE `+readingsInRange+`
+					  AND mr.type = ?
+				)
+			)
 		)
 		GROUP BY day
 		ORDER BY day
-	`, code, meteringType, monthKey(year, month))
+	`, code, from, to, meteringType)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query VT/NT readings: %w", err)
 	}
@@ -304,22 +344,30 @@ func GetDailyVTNTForMonth(ctx context.Context, db *DB, code, meteringType string
 // (low tariff) for the given metering type and year. VT/NT boundaries follow the
 // Europe/Zagreb DST schedule. The Day field of each DailyReading holds the month number (1–12).
 func GetMonthlyVTNTForYear(ctx context.Context, db *DB, code, meteringType string, year int) (vt, nt []DailyReading, err error) {
+	from, to := yearRange(year)
 	rows, err := db.Query(ctx, `
 		SELECT month,
 		       SUM(CASE WHEN is_vt THEN value * 0.25 ELSE 0 END),
 		       SUM(CASE WHEN NOT is_vt THEN value * 0.25 ELSE 0 END)
 		FROM (
-			SELECT `+localMonthNum+` AS month,
-			       mr.value          AS value,
-			       `+isVT+`          AS is_vt
-			FROM meter_readings mr
-			WHERE mr.metering_point_code = ?
-			  AND mr.type = ?
-			  AND `+localYearKey+` = ?
+			SELECT month, value, `+isVTFromLocal+` AS is_vt
+			FROM (
+				SELECT CAST(strftime('%m', local) AS INTEGER) AS month,
+				       CAST(strftime('%H', local) AS INTEGER) AS local_hour,
+				       offset_seconds,
+				       value
+				FROM (
+					SELECT `+localFields+`,
+					       mr.value AS value
+					FROM meter_readings mr
+					WHERE `+readingsInRange+`
+					  AND mr.type = ?
+				)
+			)
 		)
 		GROUP BY month
 		ORDER BY month
-	`, code, meteringType, yearKey(year))
+	`, code, from, to, meteringType)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query monthly VT/NT readings: %w", err)
 	}
@@ -382,16 +430,16 @@ func GetMonthlyReadingsForYear(ctx context.Context, db *DB, code string, year in
 // metering point, year and month, split into consumption and production slices
 // ordered by timestamp.
 func GetAllReadingsForMonth(ctx context.Context, db *DB, code string, year, month int) (consumption, production []ReadingPoint, err error) {
+	from, to := monthRange(year, month)
 	rows, err := db.Query(ctx, `
 		SELECT
 			mr.timestamp,
 			mr.type,
 			mr.value
 		FROM meter_readings mr
-		WHERE mr.metering_point_code = ?
-		  AND `+localMonthKey+` = ?
+		WHERE `+readingsInRange+`
 		ORDER BY mr.timestamp
-	`, code, monthKey(year, month))
+	`, code, from, to)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query all readings: %w", err)
 	}
@@ -422,21 +470,26 @@ func GetAllReadingsForMonth(ctx context.Context, db *DB, code string, year, mont
 // data. Results are split into consumption and production slices; the Day field of
 // each DailyReading holds the hour number as a string ("0"–"23").
 func GetHourlyAverageForMonth(ctx context.Context, db *DB, code string, year, month int) (consumption, production []DailyReading, err error) {
+	from, to := monthRange(year, month)
 	rows, err := db.Query(ctx, `
 		SELECT hour, type, AVG(hourly_kwh) AS avg_kwh
 		FROM (
-			SELECT `+localHourNum+`                                AS hour,
-			       strftime('%Y-%m-%d %H', `+localTS+`)            AS hour_ts,
-			       mr.type                                          AS type,
-			       SUM(mr.value * 0.25)                             AS hourly_kwh
-			FROM meter_readings mr
-			WHERE mr.metering_point_code = ?
-			  AND `+localMonthKey+` = ?
-			GROUP BY hour, hour_ts, mr.type
+			SELECT CAST(substr(local, 12, 2) AS INTEGER) AS hour,
+			       substr(local, 1, 13)                  AS hour_ts,
+			       type,
+			       SUM(value * 0.25)                     AS hourly_kwh
+			FROM (
+				SELECT `+localTS+` AS local,
+				       mr.type            AS type,
+				       mr.value           AS value
+				FROM meter_readings mr
+				WHERE `+readingsInRange+`
+			)
+			GROUP BY hour, hour_ts, type
 		)
 		GROUP BY hour, type
 		ORDER BY hour
-	`, code, monthKey(year, month))
+	`, code, from, to)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query hourly averages: %w", err)
 	}
@@ -766,13 +819,13 @@ func IsMonthSkipped(ctx context.Context, db *DB, code string, year, month int, d
 // spring-forward day has 92 instead of 96, and because trailing zero readings are
 // trimmed before storing (overnight production, in particular).
 func MonthAlreadyCollected(ctx context.Context, db *DB, code string, year, month int, meteringType string) (bool, error) {
+	from, to := monthRange(year, month)
 	var count int
 	err := db.QueryRow(ctx, `
 		SELECT COUNT(*) FROM meter_readings mr
-		WHERE mr.metering_point_code = ?
+		WHERE `+readingsInRange+`
 		  AND mr.type = ?
-		  AND `+localMonthKey+` = ?
-	`, code, meteringType, monthKey(year, month)).Scan(&count)
+	`, code, from, to, meteringType).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("count readings for month: %w", err)
 	}
