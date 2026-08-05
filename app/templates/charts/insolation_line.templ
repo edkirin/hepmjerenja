@@ -1,0 +1,137 @@
+package charts
+
+// InsolationLineChart renders the daily insolation (radiation + temperature) chart.
+// Call initInsolationLineChart(insolation, month, isDark) after data is fetched.
+// insolation: { days: [{day, weathercode, radiation, temp_max, temp_min}] } or null / empty
+templ InsolationLineChart() {
+	<div class="chart-section" id="wc-insolation-chart" style="display:none">
+		<div class="chart-header">
+			<h2>Sunčevo zračenje — dnevni zbroj (MJ/m²)</h2>
+			<div class="chart-header-right">
+				<button id="export-insolation-png" class="chart-export-btn">↓ PNG</button>
+			</div>
+		</div>
+		<canvas id="insolation-line-chart"></canvas>
+	</div>
+	<script>
+		var _insolationLineChart = null;
+
+		function initInsolationLineChart(insolation, month, isDark) {
+			if (_insolationLineChart) { _insolationLineChart.destroy(); _insolationLineChart = null; }
+
+			var days = insolation && insolation.days ? insolation.days : [];
+			var section = document.getElementById('wc-insolation-chart');
+			if (!days.length) {
+				section.style.display = 'none';
+				return;
+			}
+			section.style.display = '';
+
+			var parts = month.split('-');
+			var daysInMonth = new Date(Number(parts[0]), Number(parts[1]), 0).getDate();
+			var labels = [];
+			for (var d = 1; d <= daysInMonth; d++) { labels.push(d); }
+
+			var radMap = {}, maxMap = {}, minMap = {};
+			days.forEach(function(d) {
+				radMap[d.day] = d.radiation;
+				maxMap[d.day] = d.temp_max;
+				minMap[d.day] = d.temp_min;
+			});
+
+			var radValues  = labels.map(function(d) { return radMap[d]  != null ? radMap[d]  : null; });
+			var maxValues  = labels.map(function(d) { return maxMap[d]  != null ? maxMap[d]  : null; });
+			var minValues  = labels.map(function(d) { return minMap[d]  != null ? minMap[d]  : null; });
+
+			var gridColor  = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+			var labelColor = isDark ? '#cdd8e3' : '#444';
+
+			_insolationLineChart = new Chart(document.getElementById('insolation-line-chart'), {
+				type: 'line',
+				data: {
+					labels: labels,
+					datasets: [
+						{
+							label: 'Zračenje (MJ/m²)',
+							data: radValues,
+							yAxisID: 'y',
+							borderColor: 'rgba(230, 160, 20, 0.9)',
+							backgroundColor: 'rgba(230, 160, 20, 0.12)',
+							borderWidth: 2,
+							pointRadius: 3,
+							fill: true,
+							tension: 0.3,
+							spanGaps: true,
+						},
+						{
+							label: 'Najviša temperatura (°C)',
+							data: maxValues,
+							yAxisID: 'yTemp',
+							borderColor: 'rgba(192, 57, 43, 0.75)',
+							backgroundColor: 'transparent',
+							borderWidth: 1.5,
+							pointRadius: 2,
+							fill: false,
+							tension: 0.3,
+							spanGaps: true,
+							borderDash: [4, 3],
+						},
+						{
+							label: 'Najniža temperatura (°C)',
+							data: minValues,
+							yAxisID: 'yTemp',
+							borderColor: 'rgba(52, 152, 219, 0.75)',
+							backgroundColor: 'transparent',
+							borderWidth: 1.5,
+							pointRadius: 2,
+							fill: false,
+							tension: 0.3,
+							spanGaps: true,
+							borderDash: [4, 3],
+						},
+					],
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					interaction: { mode: 'index', intersect: false },
+					plugins: {
+						legend: { display: true, position: 'top' },
+						tooltip: {
+							callbacks: {
+								label: function(ctx) {
+									if (ctx.datasetIndex === 0) {
+										return ctx.dataset.label + ': ' + (ctx.parsed.y != null ? ctx.parsed.y.toFixed(1).replace('.', ',') : '—') + ' MJ/m²';
+									}
+									return ctx.dataset.label + ': ' + (ctx.parsed.y != null ? ctx.parsed.y.toFixed(1).replace('.', ',') : '—') + ' °C';
+								}
+							}
+						}
+					},
+					scales: {
+						x: {
+							grid: { color: gridColor },
+							ticks: { color: labelColor },
+						},
+						y: {
+							beginAtZero: true,
+							grid: { color: gridColor },
+							ticks: { color: labelColor },
+							title: { display: true, text: 'MJ/m²', color: labelColor },
+						},
+						yTemp: {
+							position: 'right',
+							grid: { drawOnChartArea: false },
+							ticks: { color: labelColor },
+							title: { display: true, text: '°C', color: labelColor },
+						},
+					},
+				},
+			});
+
+			document.getElementById('export-insolation-png').onclick = function() {
+				downloadPng(_insolationLineChart.canvas, 'mjerenja-zracenje.png');
+			};
+		}
+	</script>
+}

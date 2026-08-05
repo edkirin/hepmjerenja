@@ -1,0 +1,8 @@
+/build
+/main-dev
+/tmp
+/config.yaml
+/.env
+/config.ini
+/.claude
+/data

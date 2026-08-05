@@ -1,0 +1,195 @@
+package charts
+
+// MonthlyBarChart renders the monthly consumption/production bar chart container
+// for the yearly overview page.
+// Call initMonthlyBarChart(data, isDark, compareData, compareYear) after Chart.js is loaded.
+// data and compareData: { consumption: [{day, value}], production: [{day, value}] }
+// where day is the month number as a string ("1"–"12").
+// compareData and compareYear are optional; pass null/0 to show a single year.
+// Requires ChartHelpers() to be rendered first (uses kwhLabel).
+templ MonthlyBarChart() {
+	<div class="chart-section">
+		<div class="chart-header">
+			<h2>Potrošnja i Proizvodnja — mjesečni zbroj (kWh)</h2>
+			<div class="chart-header-right">
+				<button id="export-yearly-bar" class="chart-export-btn">↓ XLSX</button>
+				<button id="export-yearly-bar-png" class="chart-export-btn">↓ PNG</button>
+			</div>
+		</div>
+		<canvas id="yearly-bar-chart"></canvas>
+	</div>
+	<script>
+		var croatianMonths = ['Sij', 'Velj', 'Ožu', 'Tra', 'Svi', 'Lip', 'Srp', 'Kol', 'Ruj', 'Lis', 'Stu', 'Pro'];
+		var _yearlyBarChart = null;
+		var _yearlyBarExportFn = null;
+
+		function initMonthlyBarChart(data, isDark, compareData, compareYear, primaryYear) {
+			if (_yearlyBarChart) { _yearlyBarChart.destroy(); _yearlyBarChart = null; }
+
+			var months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+			function valuesFor(series) {
+				var map = {};
+				series.forEach(function(d) { map[Number(d.day)] = d.value; });
+				return months.map(function(m) { return map[m] || 0; });
+			}
+
+			var consValues = valuesFor(data.consumption);
+			var prodValues = valuesFor(data.production);
+
+			// Use stacked VT/NT only for primary year (not while comparing).
+			var hasVTNT = !compareData &&
+				(data.tariff_model === 'bijeli' || data.tariff_model === 'crveni') &&
+				data.consumption_vt && data.consumption_vt.length > 0;
+
+			var consVTValues = null, consNTValues = null, prodVTValues = null, prodNTValues = null;
+			var hasProdVTNT = false;
+			if (hasVTNT) {
+				consVTValues = valuesFor(data.consumption_vt);
+				consNTValues = valuesFor(data.consumption_nt);
+				if (data.production_vt && data.production_vt.length > 0) {
+					prodVTValues = valuesFor(data.production_vt);
+					prodNTValues = valuesFor(data.production_nt);
+					hasProdVTNT = true;
+				}
+			}
+
+			var datasets;
+			var compareConsValues = null, compareProdValues = null;
+			if (hasVTNT) {
+				datasets = [
+					{
+						label: 'Potrošnja VT',
+						data: consVTValues,
+						backgroundColor: 'rgba(192, 57, 43, 0.88)',
+						stack: 'cons',
+						borderRadius: 0,
+						borderSkipped: false,
+					},
+					{
+						label: 'Potrošnja NT',
+						data: consNTValues,
+						backgroundColor: 'rgba(192, 57, 43, 0.45)',
+						stack: 'cons',
+						borderRadius: { topLeft: 4, topRight: 4 },
+						borderSkipped: false,
+					},
+				];
+				if (hasProdVTNT) {
+					datasets.push({
+						label: 'Proizvodnja VT',
+						data: prodVTValues,
+						backgroundColor: 'rgba(39, 174, 96, 0.88)',
+						stack: 'prod',
+						borderRadius: 0,
+						borderSkipped: false,
+					});
+					datasets.push({
+						label: 'Proizvodnja NT',
+						data: prodNTValues,
+						backgroundColor: 'rgba(39, 174, 96, 0.45)',
+						stack: 'prod',
+						borderRadius: { topLeft: 4, topRight: 4 },
+						borderSkipped: false,
+					});
+				} else if (prodValues.some(function(v) { return v > 0; })) {
+					datasets.push({
+						label: 'Proizvodnja',
+						data: prodValues,
+						backgroundColor: 'rgba(39, 174, 96, 0.75)',
+						borderRadius: 3,
+					});
+				}
+			} else {
+				datasets = [
+					{
+						label: compareData ? 'Potrošnja ' + primaryYear : 'Potrošnja',
+						data: consValues,
+						backgroundColor: 'rgba(192, 57, 43, 0.75)',
+						borderRadius: 3,
+					},
+					{
+						label: compareData ? 'Proizvodnja ' + primaryYear : 'Proizvodnja',
+						data: prodValues,
+						backgroundColor: 'rgba(39, 174, 96, 0.75)',
+						borderRadius: 3,
+					},
+				];
+				if (compareData) {
+					compareConsValues = valuesFor(compareData.consumption);
+					compareProdValues = valuesFor(compareData.production);
+					datasets.push({
+						label: 'Potrošnja ' + compareYear,
+						data: compareConsValues,
+						backgroundColor: 'rgba(192, 57, 43, 0.3)',
+						borderRadius: 3,
+					});
+					datasets.push({
+						label: 'Proizvodnja ' + compareYear,
+						data: compareProdValues,
+						backgroundColor: 'rgba(39, 174, 96, 0.3)',
+						borderRadius: 3,
+					});
+				}
+			}
+
+			_yearlyBarChart = new Chart(document.getElementById('yearly-bar-chart'), {
+				type: 'bar',
+				data: { labels: croatianMonths, datasets: datasets },
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					plugins: {
+						legend: { display: true, position: 'top' },
+						tooltip: { callbacks: { label: kwhLabel } }
+					},
+					scales: {
+						x: { grid: { display: false } },
+						y: {
+							beginAtZero: true,
+							stacked: hasVTNT,
+							title: { display: true, text: 'kWh' }
+						}
+					}
+				}
+			});
+
+			// Store current export function so button always uses latest data.
+			_yearlyBarExportFn = function() {
+				var yearVal = new URLSearchParams(window.location.search).get('year') || new Date().getFullYear();
+				var headers, rows;
+				if (hasVTNT) {
+					headers = ['Mjesec', 'Potrošnja VT (kWh)', 'Potrošnja NT (kWh)', 'Potrošnja ukupno (kWh)'];
+					if (hasProdVTNT) headers.push('Proizvodnja VT (kWh)', 'Proizvodnja NT (kWh)', 'Proizvodnja ukupno (kWh)');
+					rows = [headers];
+					months.forEach(function(m, i) {
+						var row = [croatianMonths[i], consVTValues[i], consNTValues[i], consValues[i]];
+						if (hasProdVTNT) row.push(prodVTValues[i], prodNTValues[i], prodValues[i]);
+						rows.push(row);
+					});
+				} else {
+					headers = ['Mjesec', 'Potrošnja (kWh)', 'Proizvodnja (kWh)'];
+					if (compareData) headers.push('Potrošnja ' + compareYear + ' (kWh)', 'Proizvodnja ' + compareYear + ' (kWh)');
+					rows = [headers];
+					months.forEach(function(m, i) {
+						var row = [croatianMonths[i], consValues[i], prodValues[i]];
+						if (compareData) row.push(compareConsValues[i], compareProdValues[i]);
+						rows.push(row);
+					});
+				}
+				exportXlsx('mjerenja-godisnje-' + yearVal + '.xlsx', rows);
+			};
+		}
+
+		document.addEventListener('DOMContentLoaded', function() {
+			document.getElementById('export-yearly-bar').addEventListener('click', function() {
+				if (_yearlyBarExportFn) _yearlyBarExportFn();
+			});
+			document.getElementById('export-yearly-bar-png').addEventListener('click', function() {
+				if (!_yearlyBarChart) return;
+				var yearVal = new URLSearchParams(window.location.search).get('year') || new Date().getFullYear();
+				downloadPng(_yearlyBarChart.canvas, 'mjerenja-godisnje-' + yearVal + '.png');
+			});
+		});
+	</script>
+}

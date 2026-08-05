@@ -1,0 +1,114 @@
+package charts
+
+// NetDiffMonthlyChart renders the monthly net (production − consumption) bar chart
+// for the yearly overview page.
+// Call initNetDiffMonthlyChart(data, isDark) after Chart.js is loaded and data is fetched.
+// Expected data shape: { consumption: [{day, value}], production: [{day, value}] }
+// where day is the month number as a string ("1"–"12").
+// Requires ChartHelpers() to be rendered first (uses kwhLabel).
+// Bars are coloured green for surplus months and red for deficit months.
+// The Y axis is centred on zero.
+templ NetDiffMonthlyChart() {
+	<div class="chart-section">
+		<div class="chart-header">
+			<h2>Neto (Proizvodnja &#x2212; Potrošnja) — mjesečni zbroj (kWh)</h2>
+			<div class="chart-header-right">
+				<button id="export-yearly-diff" class="chart-export-btn">↓ XLSX</button>
+				<button id="export-yearly-diff-png" class="chart-export-btn">↓ PNG</button>
+			</div>
+		</div>
+		<canvas id="yearly-diff-chart"></canvas>
+	</div>
+	<script>
+		var _netDiffMonthlyChart = null;
+
+		// compareData: same shape as data, or null. compareYear: number or null.
+		function initNetDiffMonthlyChart(data, isDark, compareData, compareYear, primaryYear) {
+			if (_netDiffMonthlyChart) { _netDiffMonthlyChart.destroy(); _netDiffMonthlyChart = null; }
+
+			var months = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+			function valuesFor(series) {
+				var map = {};
+				series.forEach(function(d) { map[Number(d.day)] = d.value; });
+				return months.map(function(m) { return map[m] || 0; });
+			}
+
+			var consValues = valuesFor(data.consumption);
+			var prodValues = valuesFor(data.production);
+			var diffValues = months.map(function(_, i) { return prodValues[i] - consValues[i]; });
+
+			var withCompare = !!compareData;
+			var cmpDiffValues = null;
+			var maxAbsDiff = diffValues.reduce(function(m, v) { return Math.max(m, Math.abs(v)); }, 0);
+
+			if (withCompare) {
+				var cmpConsValues = valuesFor(compareData.consumption);
+				var cmpProdValues = valuesFor(compareData.production);
+				cmpDiffValues = months.map(function(_, i) { return cmpProdValues[i] - cmpConsValues[i]; });
+				maxAbsDiff = cmpDiffValues.reduce(function(m, v) { return Math.max(m, Math.abs(v)); }, maxAbsDiff);
+			}
+
+			var yMax = maxAbsDiff > 0 ? maxAbsDiff * 1.05 : 1;
+
+			var datasets = [{
+				label: withCompare ? 'Neto ' + primaryYear : 'Neto',
+				data: diffValues,
+				backgroundColor: diffValues.map(function(v) {
+					return v >= 0 ? 'rgba(39, 174, 96, 0.75)' : 'rgba(192, 57, 43, 0.75)';
+				}),
+				borderRadius: 3,
+			}];
+
+			if (withCompare) {
+				datasets.push({
+					label: 'Neto ' + compareYear,
+					data: cmpDiffValues,
+					backgroundColor: cmpDiffValues.map(function(v) {
+						return v >= 0 ? 'rgba(39, 174, 96, 0.35)' : 'rgba(192, 57, 43, 0.35)';
+					}),
+					borderRadius: 3,
+				});
+			}
+
+			_netDiffMonthlyChart = new Chart(document.getElementById('yearly-diff-chart'), {
+				type: 'bar',
+				data: {
+					labels: croatianMonths,
+					datasets: datasets,
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					plugins: {
+						legend: { display: withCompare, position: 'top' },
+						tooltip: { callbacks: { label: kwhLabel } }
+					},
+					scales: {
+						x: { grid: { display: false } },
+						y: {
+							min: -yMax,
+							max: yMax,
+							title: { display: true, text: 'kWh' }
+						}
+					}
+				}
+			});
+
+			// Export
+			document.getElementById('export-yearly-diff-png').addEventListener('click', function() {
+				var yearVal = new URLSearchParams(window.location.search).get('year') || new Date().getFullYear();
+				downloadPng(_netDiffMonthlyChart.canvas, 'mjerenja-neto-godisnje-' + yearVal + '.png');
+			});
+
+			document.getElementById('export-yearly-diff').addEventListener('click', function() {
+				var yearVal = new URLSearchParams(window.location.search).get('year') || new Date().getFullYear();
+				var rows = [['Mjesec', 'Potrošnja (kWh)', 'Proizvodnja (kWh)', 'Neto (kWh)']];
+				months.forEach(function(_, i) {
+					rows.push([croatianMonths[i], consValues[i], prodValues[i], diffValues[i]]);
+				});
+				exportXlsx('mjerenja-neto-godisnje-' + yearVal + '.xlsx', rows);
+			});
+		}
+	</script>
+}

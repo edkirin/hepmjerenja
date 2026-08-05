@@ -1,0 +1,28 @@
+# Kopirajte u config.ini i upišite HEP pristupne podatke. Sve ostale vrijednosti
+# već su zadane, pa su obavezni samo HEP_USERNAME i HEP_PASSWORD.
+#
+# Format je KEY=vrijednost, jedna postavka po retku. Komentari počinju s # ili ;.
+# [sekcije] se zanemaruju, pa nazivi postavki ostaju ravni (bez prefiksa sekcije).
+# Prave varijable okoline imaju prednost nad ovom datotekom.
+
+# ── Database ─────────────────────────────────────────────────────────────────
+# SQLite file. Its directory is created on startup; back up by copying the file
+# (together with any -wal / -shm sidecars).
+DB_PATH=./data/hepmjerenja.db
+
+# ── HEP account (required) ───────────────────────────────────────────────────
+# mjerenje.hep.hr credentials. This is a single-user application: these are the
+# only credentials it knows about and every collection uses them.
+HEP_USERNAME=
+HEP_PASSWORD=
+
+# ── Server ───────────────────────────────────────────────────────────────────
+PORT=:8000
+LOG_DIR=.
+LOG_LEVEL=info
+
+# ── Development ──────────────────────────────────────────────────────────────
+# Print every SQL query and its arguments to stdout.
+SQL_ECHO=false
+# Disable HTML/CSS/JS minification.
+DEBUG=false

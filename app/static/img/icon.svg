@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Amber background -->
+  <circle cx="12" cy="12" r="12" fill="#f59e0b"/>
+  <!-- Sun body -->
+  <circle cx="12" cy="5.5" r="1.8" fill="white"/>
+  <!-- Sun rays -->
+  <line x1="12" y1="2.5" x2="12" y2="3.4" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+  <line x1="14.3" y1="3.2" x2="13.7" y2="3.8" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+  <line x1="15.3" y1="5.5" x2="14.4" y2="5.5" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+  <line x1="9.7" y1="3.2" x2="10.3" y2="3.8" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+  <line x1="8.7" y1="5.5" x2="9.6" y2="5.5" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- Solar panel — 3×2 grid of cells, amber gaps between them -->
+  <rect x="4.25" y="10.5" width="4.5" height="4" rx="0.6" fill="white"/>
+  <rect x="9.75" y="10.5" width="4.5" height="4" rx="0.6" fill="white"/>
+  <rect x="15.25" y="10.5" width="4.5" height="4" rx="0.6" fill="white"/>
+  <rect x="4.25" y="15.5" width="4.5" height="4" rx="0.6" fill="white"/>
+  <rect x="9.75" y="15.5" width="4.5" height="4" rx="0.6" fill="white"/>
+  <rect x="15.25" y="15.5" width="4.5" height="4" rx="0.6" fill="white"/>
+</svg>

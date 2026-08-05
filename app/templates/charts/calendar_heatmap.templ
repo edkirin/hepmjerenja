@@ -1,0 +1,181 @@
+package charts
+
+// CalendarHeatmap renders the full-year calendar heatmap container.
+// Call initCalendarHeatmap(data, year, isDark) after data is fetched.
+// Expected data shape: { days: [{date, consumption, production}] }
+// where date is "YYYY-MM-DD". Each day is colored by net balance
+// (production − consumption): green = net producer, red = net consumer.
+templ CalendarHeatmap() {
+	<div class="chart-section">
+		<div class="chart-header">
+			<h2>Godišnja karta neto bilance</h2>
+			<div class="chart-header-right">
+				<button id="export-calendar" class="chart-export-btn">↓ XLSX</button>
+				<button id="export-calendar-png" class="chart-export-btn">↓ PNG</button>
+			</div>
+		</div>
+		<div id="calendar-heatmap" style="overflow-x:auto">
+			<div id="calendar-heatmap-inner" style="display:inline-block; min-width:100%"></div>
+		</div>
+		<div id="calendar-legend" style="margin-top:0.75rem; display:flex; align-items:center; gap:0.5rem; font-size:0.8rem; flex-wrap:wrap"></div>
+	</div>
+	<div id="cal-tooltip" style="position:fixed; display:none; background:#1a252f; color:#ecf0f1; padding:0.4rem 0.7rem; border-radius:4px; font-size:0.8rem; pointer-events:none; z-index:100; white-space:nowrap"></div>
+	<script>
+		function initCalendarHeatmap(data, year, isDark) {
+			// Build date → {consumption, production, net} lookup
+			var byDate = {};
+			var maxAbs = 0;
+			data.days.forEach(function(d) {
+				var net = d.production - d.consumption;
+				byDate[d.date] = { cons: d.consumption, prod: d.production, net: net };
+				if (Math.abs(net) > maxAbs) maxAbs = Math.abs(net);
+			});
+			if (maxAbs === 0) maxAbs = 1;
+
+			// Color helpers
+			function lerp(a, b, t) { return Math.round(a + (b - a) * t); }
+			function cellColor(net) {
+				if (net === undefined) return isDark ? '#2d3748' : '#e2e8f0';
+				if (net === 0) return isDark ? '#374151' : '#d1d5db';
+				var t = Math.min(Math.abs(net) / maxAbs, 1);
+				if (net > 0) {
+					// green: #bbf7d0 → #14532d
+					return 'rgb(' + lerp(187,20,t) + ',' + lerp(247,83,t) + ',' + lerp(208,45,t) + ')';
+				} else {
+					// red: #fecaca → #991b1b
+					return 'rgb(' + lerp(254,153,t) + ',' + lerp(202,27,t) + ',' + lerp(202,27,t) + ')';
+				}
+			}
+
+			// Layout constants
+			var cellSize = 18;
+			var gap = 3;
+			var step = cellSize + gap;
+			var leftPad = 22;  // day-of-week labels
+			var topPad = 22;   // month labels
+			var bottomPad = 4;
+
+			// Find week offset for Jan 1 (Mon=0 … Sun=6)
+			var jan1 = new Date(year, 0, 1);
+			var startOffset = (jan1.getDay() + 6) % 7;
+
+			// Total days in year
+			var isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+			var totalDays = isLeap ? 366 : 365;
+			var totalCells = startOffset + totalDays;
+			var numWeeks = Math.ceil(totalCells / 7);
+
+			var svgW = leftPad + numWeeks * step;
+			var svgH = topPad + 7 * step + bottomPad;
+
+			// Build SVG
+			var parts = [];
+			parts.push('<svg xmlns="http://www.w3.org/2000/svg" width="' + svgW + '" height="' + svgH + '" style="font-family:inherit">');
+
+			// Day-of-week labels (Mon, Wed, Fri)
+			var dayLabels = ['Po', '', 'Sr', '', 'Pe', '', 'Ne'];
+			var textColor = isDark ? '#6a8aaa' : '#888';
+			dayLabels.forEach(function(lbl, i) {
+				if (!lbl) return;
+				parts.push('<text x="' + (leftPad - 4) + '" y="' + (topPad + i * step + cellSize - 3) + '" text-anchor="end" font-size="12" fill="' + textColor + '">' + lbl + '</text>');
+			});
+
+			// Month labels
+			var monthNames = ['Sij','Velj','Ožu','Tra','Svi','Lip','Srp','Kol','Ruj','Lis','Stu','Pro'];
+			var lastMonth = -1;
+			for (var i = 0; i < totalDays; i++) {
+				var col = Math.floor((startOffset + i) / 7);
+				var row = (startOffset + i) % 7;
+				var d = new Date(year, 0, i + 1);
+				var m = d.getMonth();
+				if (m !== lastMonth && row === 0) {
+					lastMonth = m;
+					var x = leftPad + col * step;
+					parts.push('<text x="' + x + '" y="' + (topPad - 5) + '" font-size="12" fill="' + textColor + '">' + monthNames[m] + '</text>');
+				}
+			}
+
+			// Day cells
+			var tooltip = document.getElementById('cal-tooltip');
+			var cells = [];
+			for (var i = 0; i < totalDays; i++) {
+				var col = Math.floor((startOffset + i) / 7);
+				var row = (startOffset + i) % 7;
+				var d = new Date(year, 0, i + 1);
+				var dateStr = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+				var entry = byDate[dateStr];
+				var color = cellColor(entry ? entry.net : undefined);
+				var x = leftPad + col * step;
+				var y = topPad + row * step;
+				cells.push({ x: x, y: y, dateStr: dateStr, entry: entry });
+				parts.push('<rect x="' + x + '" y="' + y + '" width="' + cellSize + '" height="' + cellSize + '" rx="2" fill="' + color + '" data-date="' + dateStr + '" style="cursor:default"/>');
+			}
+
+			parts.push('</svg>');
+
+			var container = document.getElementById('calendar-heatmap-inner');
+			container.innerHTML = parts.join('');
+
+			// Tooltip events
+			var svg = container.querySelector('svg');
+			svg.addEventListener('mousemove', function(e) {
+				var rect = e.target;
+				if (!rect || rect.tagName !== 'rect') { tooltip.style.display = 'none'; return; }
+				var dateStr = rect.getAttribute('data-date');
+				var entry = byDate[dateStr];
+				var parts2 = [dateStr];
+				if (entry) {
+					var fmt = function(n) { return n.toFixed(2).replace('.', ','); };
+					parts2.push('Potrošnja: ' + fmt(entry.cons) + ' kWh');
+					parts2.push('Proizvodnja: ' + fmt(entry.prod) + ' kWh');
+					var net = entry.net;
+					parts2.push('Neto: ' + (net >= 0 ? '+' : '') + fmt(net) + ' kWh');
+				} else {
+					parts2.push('Nema podataka');
+				}
+				tooltip.innerHTML = parts2.join('<br>');
+				tooltip.style.display = 'block';
+				tooltip.style.left = (e.clientX + 12) + 'px';
+				tooltip.style.top  = (e.clientY - 8)  + 'px';
+			});
+			svg.addEventListener('mouseleave', function() { tooltip.style.display = 'none'; });
+
+			// Legend
+			var legendEl = document.getElementById('calendar-legend');
+			var steps = [-1, -0.5, 0, 0.5, 1];
+			var labels = ['Max. uvoz', '', 'Nula', '', 'Max. višak'];
+			var html = '<span style="color:' + textColor + '">Neto bilanca:</span>';
+			steps.forEach(function(t, i) {
+				var net = t * maxAbs;
+				html += '<span style="display:inline-flex;align-items:center;gap:3px">'
+					+ '<span style="width:12px;height:12px;border-radius:2px;background:' + cellColor(net) + ';display:inline-block"></span>'
+					+ '<span style="color:' + textColor + '">' + labels[i] + '</span></span>';
+			});
+			legendEl.innerHTML = html;
+
+			// Export
+			document.getElementById('export-calendar-png').addEventListener('click', function() {
+				var svgEl = container.querySelector('svg');
+				if (svgEl) {
+					svgElementToCanvas(svgEl, function(canvas) {
+						var a = document.createElement('a');
+						a.download = 'mjerenja-godisnja-karta-' + year + '.png';
+						a.href = canvas.toDataURL('image/png');
+						document.body.appendChild(a);
+						a.click();
+						document.body.removeChild(a);
+					});
+				}
+			});
+
+			document.getElementById('export-calendar').addEventListener('click', function() {
+				var rows = [['Datum', 'Potrošnja (kWh)', 'Proizvodnja (kWh)', 'Neto (kWh)']];
+				data.days.forEach(function(d) {
+					var net = d.production - d.consumption;
+					rows.push([d.date, d.consumption, d.production, net]);
+				});
+				exportXlsx('mjerenja-godisnja-karta-' + year + '.xlsx', rows);
+			});
+		}
+	</script>
+}

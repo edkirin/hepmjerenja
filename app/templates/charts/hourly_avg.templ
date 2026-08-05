@@ -1,0 +1,125 @@
+package charts
+
+// HourlyAvgChart renders the average hourly profile chart container.
+// Call initHourlyAvgChart(data, isDark) after Chart.js is loaded and data is fetched.
+// Expected data shape: { consumption: [{day, value}], production: [{day, value}] }
+// where day is the hour number as a string ("0"–"23").
+// Requires ChartHelpers() to be rendered first (uses kwhLabel).
+templ HourlyAvgChart() {
+	<div class="chart-section">
+		<div class="chart-header">
+			<h2>Prosječni profil dana (kWh/sat)</h2>
+			<div class="chart-header-right">
+				<button id="export-hourly" class="chart-export-btn">↓ XLSX</button>
+				<button id="export-hourly-png" class="chart-export-btn">↓ PNG</button>
+			</div>
+		</div>
+		<canvas id="hourly-avg-chart"></canvas>
+	</div>
+	<script>
+		var _hourlyAvgChart = null;
+
+		// compareData: same shape as data, or null. compareMonth: "YYYY-MM" or null.
+		function initHourlyAvgChart(data, isDark, compareData, compareMonth) {
+			if (_hourlyAvgChart) { _hourlyAvgChart.destroy(); _hourlyAvgChart = null; }
+
+			var hours = [];
+			for (var h = 0; h < 24; h++) {
+				hours.push(h < 10 ? '0' + h + ':00' : h + ':00');
+			}
+
+			function valuesFor(series) {
+				var map = {};
+				series.forEach(function(d) { map[Number(d.day)] = d.value; });
+				return Array.from({length: 24}, function(_, i) { return map[i] || 0; });
+			}
+
+			var consValues = valuesFor(data.consumption);
+			var prodValues = valuesFor(data.production);
+			var withCompare = !!compareData;
+
+			var datasets = [
+				{
+					label: withCompare ? 'Potrošnja ' + _fmtMonthLabel(window._hourlyPrimaryMonth) : 'Potrošnja',
+					data: consValues,
+					borderColor: 'rgba(192, 57, 43, 0.9)',
+					backgroundColor: 'rgba(192, 57, 43, 0.1)',
+					borderWidth: 2,
+					pointRadius: 3,
+					fill: true,
+					tension: 0.3,
+				},
+				{
+					label: withCompare ? 'Proizvodnja ' + _fmtMonthLabel(window._hourlyPrimaryMonth) : 'Proizvodnja',
+					data: prodValues,
+					borderColor: 'rgba(39, 174, 96, 0.9)',
+					backgroundColor: 'rgba(39, 174, 96, 0.1)',
+					borderWidth: 2,
+					pointRadius: 3,
+					fill: true,
+					tension: 0.3,
+				},
+			];
+
+			if (withCompare) {
+				var cmpConsValues = valuesFor(compareData.consumption);
+				var cmpProdValues = valuesFor(compareData.production);
+				datasets.push({
+					label: 'Potrošnja ' + _fmtMonthLabel(compareMonth),
+					data: cmpConsValues,
+					borderColor: 'rgba(192, 57, 43, 0.4)',
+					backgroundColor: 'rgba(192, 57, 43, 0.04)',
+					borderWidth: 2,
+					borderDash: [5, 4],
+					pointRadius: 2,
+					fill: true,
+					tension: 0.3,
+				});
+				datasets.push({
+					label: 'Proizvodnja ' + _fmtMonthLabel(compareMonth),
+					data: cmpProdValues,
+					borderColor: 'rgba(39, 174, 96, 0.4)',
+					backgroundColor: 'rgba(39, 174, 96, 0.04)',
+					borderWidth: 2,
+					borderDash: [5, 4],
+					pointRadius: 2,
+					fill: true,
+					tension: 0.3,
+				});
+			}
+
+			_hourlyAvgChart = new Chart(document.getElementById('hourly-avg-chart'), {
+				type: 'line',
+				data: {
+					labels: hours,
+					datasets: datasets,
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					plugins: {
+						legend: { display: true, position: 'top' },
+						tooltip: { callbacks: { label: kwhLabel } }
+					},
+					scales: {
+						x: { grid: { display: false } },
+						y: { beginAtZero: true, title: { display: true, text: 'kWh' } }
+					}
+				}
+			});
+
+			// Export
+			document.getElementById('export-hourly-png').addEventListener('click', function() {
+				downloadPng(_hourlyAvgChart.canvas, 'mjerenja-satni-prosjek.png');
+			});
+
+			document.getElementById('export-hourly').addEventListener('click', function() {
+				var rows = [['Sat', 'Potrošnja (kWh)', 'Proizvodnja (kWh)']];
+				hours.forEach(function(h, i) {
+					rows.push([h, consValues[i], prodValues[i]]);
+				});
+				exportXlsx('mjerenja-satni-prosjek.xlsx', rows);
+			});
+		}
+	</script>
+}

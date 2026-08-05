@@ -1,0 +1,243 @@
+package charts
+
+// NetDiffChart renders the net (production − consumption) 15-minute line chart container.
+// Call initNetDiffChart(data, month, isDark) after Chart.js is loaded and data is fetched.
+// Expected data shape: { all_consumption: [{time, value}], all_production: [{time, value}] }
+// Requires ChartHelpers() to be rendered first (uses buildTimeAxis, buildCrosshairPlugin, kwhLabel).
+// The Y axis is centred on zero so positive (surplus) and negative (deficit) values are symmetric.
+templ NetDiffChart() {
+	<div class="chart-section">
+		<div class="chart-header">
+			<h2>Neto (Proizvodnja &#x2212; Potrošnja) — sva mjerenja (kWh)</h2>
+			<div class="chart-header-right">
+				<div id="vtnt-legend-diff" class="vtnt-legend" style="display:none">
+					<span class="vtnt-legend-item"><span class="vtnt-legend-swatch vtnt-vt"></span>VT</span>
+					<span class="vtnt-legend-item"><span class="vtnt-legend-swatch vtnt-nt"></span>NT</span>
+				</div>
+				<select id="day-select-diff" class="chart-day-select">
+					<option value="">— cijeli mjesec —</option>
+				</select>
+				<button id="export-diff" class="chart-export-btn">↓ XLSX</button>
+				<button id="export-diff-png" class="chart-export-btn">↓ PNG</button>
+			</div>
+		</div>
+		<div style="position:relative;height:400px">
+			<canvas id="diff-chart"></canvas>
+			<button id="reset-zoom-diff" style="display:none;position:absolute;top:8px;right:8px;background:#2c3e50;color:#fff;border:none;padding:0.4rem 0.75rem;border-radius:4px;cursor:pointer;font-size:0.85rem;">Reset</button>
+		</div>
+	</div>
+	<script>
+		var _netDiffChart = null;
+
+		// compareData: same shape as data, or null. compareMonth: "YYYY-MM" or null.
+		function initNetDiffChart(data, month, isDark, compareData, compareMonth) {
+			if (_netDiffChart) { _netDiffChart.destroy(); _netDiffChart = null; }
+
+			var axis = buildTimeAxis(month);
+			var times = axis.times;
+			var vtntRanges = buildVTNTRangesFromTimes(times, month, data.tariff_model);
+			var vtntPlugin  = buildVTNTPlugin(vtntRanges, isDark);
+			var vtntLegendDiff = document.getElementById('vtnt-legend-diff');
+			if (vtntLegendDiff) vtntLegendDiff.style.display = vtntPlugin ? '' : 'none';
+
+			var parts = month.split('-');
+			var daysInMonth = new Date(Number(parts[0]), Number(parts[1]), 0).getDate();
+			var slotsPerDay = 96;
+
+			var consMap = {};
+			data.all_consumption.forEach(function(d) { consMap[d.time] = d.value; });
+			var prodMap = {};
+			data.all_production.forEach(function(d) { prodMap[d.time] = d.value; });
+
+			var diffValues = times.map(function(t) {
+				var c = consMap[t] !== undefined ? consMap[t] : null;
+				var p = prodMap[t] !== undefined ? prodMap[t] : null;
+				if (c === null && p === null) return null;
+				return (p || 0) - (c || 0);
+			});
+
+			var withCompare = !!compareData;
+			var cmpDiffValues = null;
+
+			if (withCompare) {
+				// Align comparison by slot position (sort by time string, map positionally).
+				var cmpConsSorted = compareData.all_consumption.slice().sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+				var cmpProdSorted = compareData.all_production.slice().sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+				var cmpConsIdx = {};
+				var cmpProdIdx = {};
+				cmpConsSorted.forEach(function(d, i) { cmpConsIdx[i] = d.value; });
+				cmpProdSorted.forEach(function(d, i) { cmpProdIdx[i] = d.value; });
+				cmpDiffValues = times.map(function(_, i) {
+					var c = cmpConsIdx[i] !== undefined ? cmpConsIdx[i] : null;
+					var p = cmpProdIdx[i] !== undefined ? cmpProdIdx[i] : null;
+					if (c === null && p === null) return null;
+					return (p || 0) - (c || 0);
+				});
+			}
+
+			var maxAbsDiff = diffValues
+				.filter(function(v) { return v !== null; })
+				.reduce(function(m, v) { return Math.max(m, Math.abs(v)); }, 0);
+			if (cmpDiffValues) {
+				maxAbsDiff = cmpDiffValues
+					.filter(function(v) { return v !== null; })
+					.reduce(function(m, v) { return Math.max(m, Math.abs(v)); }, maxAbsDiff);
+			}
+			var diffYMax = maxAbsDiff > 0 ? maxAbsDiff * 1.05 : 1;
+
+			var crosshairPlugin = buildCrosshairPlugin(axis.midnightIndices, isDark);
+
+			var resetBtnDiff = document.getElementById('reset-zoom-diff');
+			var daySelect = document.getElementById('day-select-diff');
+
+			// Populate day options (clear first on re-init).
+			daySelect.innerHTML = '<option value="">— cijeli mjesec —</option>';
+			for (var d = 1; d <= daysInMonth; d++) {
+				var opt = document.createElement('option');
+				opt.value = d;
+				opt.textContent = d + '.';
+				daySelect.appendChild(opt);
+			}
+
+			var datasets = [{
+				label: withCompare ? 'Neto ' + _fmtMonthLabel(month) : 'Neto',
+				data: diffValues,
+				segment: {
+					borderColor: function(ctx) {
+						return ctx.p1.parsed.y >= 0 ? 'rgba(39,174,96,0.85)' : 'rgba(192,57,43,0.85)';
+					},
+					backgroundColor: function(ctx) {
+						return ctx.p1.parsed.y >= 0 ? 'rgba(39,174,96,0.12)' : 'rgba(192,57,43,0.12)';
+					},
+				},
+				borderWidth: 1,
+				pointRadius: 0,
+				fill: 'origin',
+				spanGaps: false,
+			}];
+
+			if (withCompare) {
+				datasets.push({
+					label: 'Neto ' + _fmtMonthLabel(compareMonth),
+					data: cmpDiffValues,
+					segment: {
+						borderColor: function(ctx) {
+							return ctx.p1.parsed.y >= 0 ? 'rgba(39,174,96,0.4)' : 'rgba(192,57,43,0.4)';
+						},
+					},
+					borderWidth: 1,
+					borderDash: [4, 3],
+					pointRadius: 0,
+					fill: false,
+					spanGaps: false,
+				});
+			}
+
+			_netDiffChart = new Chart(document.getElementById('diff-chart'), {
+				type: 'line',
+				plugins: vtntPlugin ? [vtntPlugin, crosshairPlugin] : [crosshairPlugin],
+				data: {
+					labels: times,
+					datasets: datasets,
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					animation: false,
+					plugins: {
+						legend: { display: withCompare, position: 'top' },
+						tooltip: {
+							mode: 'index',
+							intersect: false,
+							callbacks: { label: kwhLabel }
+						},
+						zoom: {
+							zoom: {
+								drag: {
+									enabled: true,
+									backgroundColor: 'rgba(44,62,80,0.15)',
+									borderColor: 'rgba(44,62,80,0.4)',
+									borderWidth: 1,
+								},
+								mode: 'x',
+								onZoomComplete: function(ctx) {
+									resetBtnDiff.style.display = 'block';
+									ctx.chart.options.plugins.zoom.zoom.drag.enabled = false;
+									ctx.chart.options.plugins.zoom.pan.enabled = true;
+									ctx.chart.update('none');
+								}
+							},
+							pan: { enabled: false, mode: 'x' }
+						}
+					},
+					scales: {
+						x: {
+							grid: { display: false },
+							ticks: {
+								maxTicksLimit: 16,
+								maxRotation: 0,
+								callback: function(value) {
+									var label = times[value];
+									if (!label) return '';
+									var sp = label.indexOf(' ');
+									return (this.max - this.min) > 200
+										? parseInt(label, 10)
+										: label.substring(sp + 1);
+								}
+							}
+						},
+						y: {
+							min: -diffYMax,
+							max: diffYMax,
+							title: { display: true, text: 'kWh' }
+						}
+					}
+				}
+			});
+
+			function zoomToDay(day) {
+				var startIdx = (day - 1) * slotsPerDay;
+				var endIdx = Math.min(day * slotsPerDay - 1, times.length - 1);
+				_netDiffChart.zoomScale('x', {min: startIdx, max: endIdx});
+				_netDiffChart.options.plugins.zoom.zoom.drag.enabled = false;
+				_netDiffChart.options.plugins.zoom.pan.enabled = true;
+				_netDiffChart.update('none');
+				resetBtnDiff.style.display = 'block';
+			}
+
+			function resetZoom() {
+				_netDiffChart.resetZoom();
+				_netDiffChart.options.plugins.zoom.zoom.drag.enabled = true;
+				_netDiffChart.options.plugins.zoom.pan.enabled = false;
+				_netDiffChart.update('none');
+				resetBtnDiff.style.display = 'none';
+				daySelect.value = '';
+			}
+
+			daySelect.addEventListener('change', function() {
+				var day = Number(this.value);
+				if (!day) { resetZoom(); } else { zoomToDay(day); }
+			});
+
+			resetBtnDiff.addEventListener('click', resetZoom);
+
+			// Export (primary month only)
+			document.getElementById('export-diff-png').addEventListener('click', function() {
+				downloadPng(_netDiffChart.canvas, 'mjerenja-neto-' + month + '.png');
+			});
+
+			document.getElementById('export-diff').addEventListener('click', function() {
+				var rows = [['Vrijeme', 'Potrošnja (kWh)', 'Proizvodnja (kWh)', 'Neto (kWh)']];
+				times.forEach(function(t, i) {
+					var c = consMap[t];
+					var p = prodMap[t];
+					var net = diffValues[i];
+					if (net !== null) {
+						rows.push([t, c !== undefined ? c : '', p !== undefined ? p : '', net]);
+					}
+				});
+				exportXlsx('mjerenja-neto-' + month + '.xlsx', rows);
+			});
+		}
+	</script>
+}

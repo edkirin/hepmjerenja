@@ -1,0 +1,889 @@
+package templates
+
+import (
+	"fmt"
+	"hepmjerenja/app/templates/charts"
+	"time"
+)
+
+// Point holds the data the template needs to render the metering point selector.
+type Point struct {
+	Code    string
+	Address string
+}
+
+// IndexProps holds all data passed to the Index template.
+type IndexProps struct {
+	SelectedMonth   time.Time
+	AvailableMonths []time.Time
+	Points          []Point
+	SelectedCode    string
+	// HepConfigured reports whether HEP_USERNAME and HEP_PASSWORD are set.
+	HepConfigured  bool
+	LastFetchError *string
+}
+
+func croatianMonth(t time.Time) string {
+	names := [...]string{
+		"Siječanj", "Veljača", "Ožujak", "Travanj", "Svibanj", "Lipanj",
+		"Srpanj", "Kolovoz", "Rujan", "Listopad", "Studeni", "Prosinac",
+	}
+	return fmt.Sprintf("%s %d", names[t.Month()-1], t.Year())
+}
+
+templ Index(p IndexProps) {
+	@Layout(LayoutProps{Title: "Mjesečni pregled", ActivePath: "/mjesecno"}) {
+		<style>
+			.chart-section { background: #fff; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+			.chart-section canvas { max-height: 400px; }
+			.chart-section h2 { margin-bottom: 1rem; font-size: 1.1rem; color: #2c3e50; }
+			.selectors { margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
+				.selectors .selectors-right { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; }
+			.selectors label { font-weight: 500; }
+			.selectors select { padding: 0.4rem 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 1rem; background: #fff; cursor: pointer; }
+			.selectors .point-name { font-weight: 500; }
+			.setup-notice { display: flex; align-items: flex-start; gap: 0.75rem; background: #fffbe6; border: 1px solid #f0c040; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; font-size: 0.95rem; line-height: 1.5; }
+			.setup-notice-icon { font-size: 1.4rem; flex-shrink: 0; line-height: 1.2; }
+			.setup-notice a { color: #1a56db; font-weight: 600; text-decoration: underline; }
+			html.dark .setup-notice { background: #2a2500; border-color: #8a6a00; color: #f0d080; }
+			html.dark .setup-notice a { color: #7eb3ff; }
+			.fetch-error { display: flex; align-items: flex-start; gap: 0.75rem; background: #fde8e8; border: 1px solid #e53e3e; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; font-size: 0.95rem; line-height: 1.5; }
+			.fetch-error-icon { font-size: 1.4rem; flex-shrink: 0; line-height: 1.2; }
+			.fetch-error a { color: #c53030; font-weight: 600; text-decoration: underline; }
+			.fetch-error-detail { margin-top: 0.4rem; font-size: 0.8rem; color: #9b2c2c; font-family: monospace; word-break: break-all; }
+			html.dark .fetch-error { background: #3b1111; border-color: #c53030; color: #feb2b2; }
+			html.dark .fetch-error a { color: #fc8181; }
+			html.dark .fetch-error-detail { color: #fc8181; }
+
+			/* Widgets */
+			.widgets { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+			.widget { background: #fff; padding: 1.25rem 1.5rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; flex-direction: column; gap: 0.2rem; }
+			.widget-label { font-size: 0.75rem; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.06em; }
+			.widget-vrow { display: flex; align-items: baseline; gap: 0.3rem; }
+			.widget-value { font-size: 1.6rem; font-weight: 700; color: #2c3e50; line-height: 1.1; }
+			.widget-value.cons { color: rgba(192, 57, 43, 1); }
+			.widget-value.prod { color: rgba(39, 174, 96, 1); }
+			.widget-value.positive { color: rgba(39, 174, 96, 1); }
+			.widget-value.negative { color: rgba(192, 57, 43, 1); }
+			.widget-unit { font-size: 0.88rem; color: #aaa; }
+			.widget-sub { font-size: 0.78rem; color: #aaa; margin-top: 0.1rem; }
+			.widget-vtnt { margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; border-top: 1px solid #eee; padding-top: 0.4rem; }
+			.widget-vtnt-row { display: flex; align-items: baseline; gap: 0.3rem; }
+			.widget-vtnt-label { font-size: 0.7rem; font-weight: 700; color: #aaa; text-transform: uppercase; min-width: 1.5rem; }
+			.widget-vtnt-value { font-size: 1rem; font-weight: 600; color: #2c3e50; }
+			.widget-vtnt-unit { font-size: 0.75rem; color: #aaa; }
+			html.dark .widget-vtnt { border-top-color: #2a3a4a; }
+			html.dark .widget-vtnt-value { color: #c0ccd8; }
+			.cmp-widgets-label { font-size: 0.75rem; color: #888; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.5rem; }
+			.widget-delta { font-size: 0.9rem; font-weight: 600; margin-top: 0.2rem; color: #aaa; }
+			.widget-delta.delta-pos { color: rgba(39, 174, 96, 1); }
+			.widget-delta.delta-neg { color: rgba(192, 57, 43, 1); }
+			html.dark .cmp-widgets-label { color: #6a8aaa; }
+			html.dark .widget-delta { color: #6a8aaa; }
+
+			/* Month picker */
+			.month-picker-wrap { position: relative; }
+			.month-picker-btn { display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.9rem; border: 1px solid #ddd; border-radius: 4px; background: #fff; font-size: 1rem; cursor: pointer; color: #2c3e50; white-space: nowrap; }
+			.month-picker-btn:hover { background: #f5f5f5; }
+			.month-picker-btn.mp-btn-open { border-color: #2c3e50; }
+			.mp-caret { font-size: 0.7rem; color: #888; }
+			.month-picker { position: absolute; right: 0; top: calc(100% + 4px); background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); padding: 0.75rem; width: 220px; z-index: 100; }
+			.mp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
+			.mp-header span { font-weight: 700; font-size: 1rem; color: #2c3e50; }
+			.mp-nav { background: none; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; font-size: 1.2rem; line-height: 1; padding: 0.15rem 0.5rem; color: #2c3e50; }
+			.mp-nav:hover:not(:disabled) { background: #f0f0f0; }
+			.mp-nav:disabled { opacity: 0.3; cursor: default; }
+			.mp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.3rem; }
+			.mp-month { background: none; border: 1px solid transparent; border-radius: 4px; padding: 0.4rem 0; font-size: 0.85rem; cursor: default; color: #bbb; text-align: center; }
+			.mp-month.mp-available { color: #2c3e50; cursor: pointer; border-color: #e0e0e0; }
+			.mp-month.mp-available:hover { background: #f0f4f8; border-color: #bbb; }
+			.mp-month.mp-selected { background: #2c3e50 !important; color: #fff !important; border-color: #2c3e50 !important; }
+			html.dark .month-picker-btn { background: #16213e; border-color: #2a4a7f; color: #e0e0e0; }
+			html.dark .month-picker-btn:hover { background: #1a2a4a; }
+			html.dark .month-picker-btn.mp-btn-open { border-color: #4a90d9; }
+			html.dark .month-picker { background: #16213e; border-color: #2a4a7f; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+			html.dark .mp-header span { color: #e0e0e0; }
+			html.dark .mp-nav { border-color: #2a4a7f; color: #e0e0e0; }
+			html.dark .mp-nav:hover:not(:disabled) { background: #1e3a5f; }
+			html.dark .mp-month.mp-available { color: #c0d0e0; border-color: #2a4a7f; }
+			html.dark .mp-month.mp-available:hover { background: #1e3a5f; border-color: #4a90d9; }
+			html.dark .mp-month.mp-selected { background: #4a90d9 !important; border-color: #4a90d9 !important; }
+
+			/* View toggle */
+			.view-toggle { display: flex; border: 1px solid #ddd; border-radius: 6px; overflow: hidden; margin-bottom: 1.5rem; width: fit-content; }
+			.view-toggle-btn { padding: 0.4rem 1.1rem; border: none; background: #fff; cursor: pointer; font-size: 0.9rem; color: #2c3e50; }
+			.view-toggle-btn.active { background: #2c3e50; color: #fff; }
+			html.dark .view-toggle { border-color: #444; }
+			html.dark .view-toggle-btn { background: #2a2a2a; color: #ccc; }
+			html.dark .view-toggle-btn.active { background: #4a90d9; color: #fff; }
+
+			/* Data tables */
+			.table-section { background: #fff; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: none; }
+			.table-section h2 { margin-bottom: 1rem; font-size: 1.1rem; color: #2c3e50; }
+			.data-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+			.data-table th { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 2px solid #ddd; font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+			.data-table th.num, .data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+			.data-table td { padding: 0.45rem 0.75rem; border-bottom: 1px solid #eee; }
+			.data-table tr:last-child td { border-bottom: none; }
+			.data-table td.cons { color: rgba(192, 57, 43, 1); }
+			.data-table td.prod { color: rgba(39, 174, 96, 1); }
+			.data-table td.pos { color: rgba(39, 174, 96, 1); }
+			.data-table td.neg { color: rgba(192, 57, 43, 1); }
+			html.dark .table-section { background: #1e2a35; }
+			html.dark .table-section h2 { color: #a0b4cc; }
+			html.dark .data-table th { color: #6a8aaa; border-bottom-color: #2e3f50; }
+			html.dark .data-table td { border-bottom-color: #2a3a4a; color: #c0ccd8; }
+			@media (max-width: 640px) {
+				.table-section { overflow-x: auto; }
+				#tbl-daily .data-table { min-width: 640px; width: auto; }
+				#tbl-hourly .data-table { min-width: 320px; width: auto; }
+			}
+		</style>
+		if p.LastFetchError != nil {
+			<div class="fetch-error">
+				<span class="fetch-error-icon">&#x274C;</span>
+				<span>
+					<strong>Dohvaćanje podataka nije uspjelo.</strong>
+					Provjerite HEP pristupne podatke (<code>HEP_USERNAME</code> / <code>HEP_PASSWORD</code>) u <code>config.ini</code> datoteci.
+					<div class="fetch-error-detail">{ *p.LastFetchError }</div>
+				</span>
+			</div>
+		}
+		if !p.HepConfigured {
+			<div class="setup-notice">
+				<span class="setup-notice-icon">&#x26A0;&#xFE0F;</span>
+				<span>
+					HEP pristupni podaci nisu postavljeni — podaci se ne mogu dohvatiti.
+					Postavite <code>HEP_USERNAME</code> i <code>HEP_PASSWORD</code> u <code>config.ini</code> datoteci i ponovo pokrenite aplikaciju.
+				</span>
+			</div>
+		}
+		<h1>Mjesečni pregled — { croatianMonth(p.SelectedMonth) }</h1>
+		<div class="selectors">
+			<div>
+				<label>Mjerno mjesto: </label>
+				if len(p.Points) > 1 {
+					<select id="point-select" onchange="updateUrl()">
+						for _, pt := range p.Points {
+							if pt.Code == p.SelectedCode {
+								<option value={ pt.Code } selected>{ pt.Address } ({ pt.Code })</option>
+							} else {
+								<option value={ pt.Code }>{ pt.Address } ({ pt.Code })</option>
+							}
+						}
+					</select>
+				} else if len(p.Points) == 1 {
+					<span class="point-name"><strong>{ p.Points[0].Address }</strong> ({ p.Points[0].Code })</span>
+				}
+			</div>
+			<div class="selectors-right">
+				<div class="month-picker-wrap">
+					<span id="mp-data" data-selected={ p.SelectedMonth.Format("2006-01") } data-available={ AvailableMonthsJSON(p.AvailableMonths) } style="display:none"></span>
+					<button type="button" id="month-picker-btn" class="month-picker-btn" onclick="mpToggle()">
+						{ croatianMonth(p.SelectedMonth) } <span class="mp-caret">▾</span>
+					</button>
+					<div id="month-picker" class="month-picker" style="display:none">
+						<div class="mp-header">
+							<button type="button" class="mp-nav" onclick="mpChangeYear(-1)">&#8249;</button>
+							<span id="mp-year-label"></span>
+							<button type="button" class="mp-nav" onclick="mpChangeYear(1)">&#8250;</button>
+						</div>
+						<div class="mp-grid" id="mp-grid"></div>
+					</div>
+				</div>
+				if len(p.AvailableMonths) > 1 {
+					<span style="color:#aaa; align-self:center; padding: 0 0.1rem;">vs</span>
+					<div class="month-picker-wrap">
+						<span id="cmp-data" data-selected={ p.SelectedMonth.Format("2006-01") } data-available={ AvailableMonthsJSON(p.AvailableMonths) } style="display:none"></span>
+						<button type="button" id="cmp-picker-btn" class="month-picker-btn" onclick="cmpToggle()">
+							— vs — <span class="mp-caret">▾</span>
+						</button>
+						<div id="cmp-picker" class="month-picker" style="display:none">
+							<div class="mp-header">
+								<button type="button" class="mp-nav" onclick="cmpChangeYear(-1)">&#8249;</button>
+								<span id="cmp-year-label"></span>
+								<button type="button" class="mp-nav" onclick="cmpChangeYear(1)">&#8250;</button>
+							</div>
+							<div class="mp-grid" id="cmp-grid"></div>
+						</div>
+					</div>
+				}
+			</div>
+		</div>
+		<script>
+			var _mpData = document.getElementById('mp-data');
+			var mpAvailable = {};
+			JSON.parse(_mpData.dataset.available).forEach(function(k) { mpAvailable[k] = true; });
+			var _mpSelected = _mpData.dataset.selected;
+			var _mpYear = parseInt(_mpSelected.split('-')[0]);
+			var _mpMinYear = 9999, _mpMaxYear = 0;
+			Object.keys(mpAvailable).forEach(function(k) {
+				var y = parseInt(k.split('-')[0]);
+				if (y < _mpMinYear) _mpMinYear = y;
+				if (y > _mpMaxYear) _mpMaxYear = y;
+			});
+
+			var _mpCrMonths = ['Sij','Velj','Ožu','Tra','Svi','Lip','Srp','Kol','Ruj','Lis','Stu','Pro'];
+			var _mpOpen = false;
+
+			function mpRender() {
+				document.getElementById('mp-year-label').textContent = _mpYear;
+				var grid = document.getElementById('mp-grid');
+				grid.innerHTML = '';
+				for (var m = 1; m <= 12; m++) {
+					var key = _mpYear + '-' + (m < 10 ? '0' + m : m);
+					var btn = document.createElement('button');
+					btn.type = 'button';
+					btn.textContent = _mpCrMonths[m - 1];
+					btn.className = 'mp-month';
+					if (key === _mpSelected) btn.classList.add('mp-selected');
+					if (mpAvailable[key]) {
+						btn.classList.add('mp-available');
+						btn.onclick = (function(k) { return function() { mpSelect(k); }; })(key);
+					} else {
+						btn.disabled = true;
+					}
+					grid.appendChild(btn);
+				}
+				var prevBtn = document.querySelector('.mp-nav');
+				var nextBtn = document.querySelectorAll('.mp-nav')[1];
+				if (prevBtn) prevBtn.disabled = _mpYear <= _mpMinYear;
+				if (nextBtn) nextBtn.disabled = _mpYear >= _mpMaxYear;
+			}
+
+			function mpToggle() {
+				_mpOpen = !_mpOpen;
+				var picker = document.getElementById('month-picker');
+				picker.style.display = _mpOpen ? 'block' : 'none';
+				if (_mpOpen) { _mpYear = parseInt(_mpSelected.split('-')[0]); mpRender(); }
+				document.getElementById('month-picker-btn').classList.toggle('mp-btn-open', _mpOpen);
+			}
+
+			function mpChangeYear(delta) {
+				_mpYear = Math.max(_mpMinYear, Math.min(_mpMaxYear, _mpYear + delta));
+				mpRender();
+			}
+
+			function mpSelect(key) {
+				var params = new URLSearchParams();
+				params.set('month', key);
+				var pointEl = document.getElementById('point-select');
+				if (pointEl) params.set('code', pointEl.value);
+				location.href = '/mjesecno?' + params.toString();
+			}
+
+			function updateUrl() {
+				var params = new URLSearchParams();
+				var pointEl = document.getElementById('point-select');
+				if (pointEl) params.set('code', pointEl.value);
+				params.set('month', _mpSelected);
+				location.href = '/mjesecno?' + params.toString();
+			}
+
+			// Close picker when clicking outside.
+			document.addEventListener('click', function(e) {
+				if (_mpOpen && !document.getElementById('month-picker-btn').contains(e.target) && !document.getElementById('month-picker').contains(e.target)) {
+					_mpOpen = false;
+					document.getElementById('month-picker').style.display = 'none';
+					document.getElementById('month-picker-btn').classList.remove('mp-btn-open');
+				}
+			});
+		</script>
+		<p id="tariff-notice" style="display:none;font-size:0.85rem;color:#888;margin-top:-1rem;margin-bottom:2rem"></p>
+		<div class="view-toggle">
+			<button class="view-toggle-btn" id="btn-charts" onclick="setView('charts')">Grafovi</button>
+			<button class="view-toggle-btn" id="btn-tables" onclick="setView('tables')">Tablice</button>
+		</div>
+		<div class="widgets" id="widgets">
+			<div class="widget">
+				<div class="widget-label">Potrošnja</div>
+				<div class="widget-vrow">
+					<div class="widget-value cons" id="w-cons">—</div>
+					<div class="widget-unit">kWh</div>
+				</div>
+				<div class="widget-vtnt" id="wc-vtnt" style="display:none">
+					<div class="widget-vtnt-row">
+						<span class="widget-vtnt-label">VT</span>
+						<span class="widget-vtnt-value" id="w-vt">—</span>
+						<span class="widget-vtnt-unit">kWh</span>
+					</div>
+					<div class="widget-vtnt-row">
+						<span class="widget-vtnt-label">NT</span>
+						<span class="widget-vtnt-value" id="w-nt">—</span>
+						<span class="widget-vtnt-unit">kWh</span>
+					</div>
+				</div>
+			</div>
+			<div class="widget" id="wc-prod">
+				<div class="widget-label">Proizvodnja</div>
+				<div class="widget-vrow">
+					<div class="widget-value prod" id="w-prod">—</div>
+					<div class="widget-unit">kWh</div>
+				</div>
+				<div class="widget-vtnt" id="wc-prod-vtnt" style="display:none">
+					<div class="widget-vtnt-row">
+						<span class="widget-vtnt-label">VT</span>
+						<span class="widget-vtnt-value" id="w-prod-vt">—</span>
+						<span class="widget-vtnt-unit">kWh</span>
+					</div>
+					<div class="widget-vtnt-row">
+						<span class="widget-vtnt-label">NT</span>
+						<span class="widget-vtnt-value" id="w-prod-nt">—</span>
+						<span class="widget-vtnt-unit">kWh</span>
+					</div>
+				</div>
+			</div>
+			<div class="widget" id="wc-net">
+				<div class="widget-label">Neto bilanca</div>
+				<div class="widget-vrow">
+					<div class="widget-value" id="w-net">—</div>
+					<div class="widget-unit">kWh</div>
+				</div>
+				<div class="widget-sub" id="w-net-sub"></div>
+				<div class="widget-vtnt" id="wc-net-vtnt" style="display:none">
+					<div class="widget-vtnt-row">
+						<span class="widget-vtnt-label">VT</span>
+						<span class="widget-vtnt-value" id="w-net-vt">—</span>
+						<span class="widget-vtnt-unit">kWh</span>
+					</div>
+					<div class="widget-vtnt-row">
+						<span class="widget-vtnt-label">NT</span>
+						<span class="widget-vtnt-value" id="w-net-nt">—</span>
+						<span class="widget-vtnt-unit">kWh</span>
+					</div>
+				</div>
+			</div>
+			<div class="widget">
+				<div class="widget-label">Najveća potrošnja</div>
+				<div class="widget-vrow">
+					<div class="widget-value" id="w-peak-cons">—</div>
+					<div class="widget-unit">kWh</div>
+				</div>
+				<div class="widget-sub" id="w-peak-cons-day"></div>
+			</div>
+			<div class="widget" id="wc-peak-prod">
+				<div class="widget-label">Najveća proizvodnja</div>
+				<div class="widget-vrow">
+					<div class="widget-value" id="w-peak-prod">—</div>
+					<div class="widget-unit">kWh</div>
+				</div>
+				<div class="widget-sub" id="w-peak-prod-day"></div>
+			</div>
+		</div>
+		<div id="cmp-widgets-section" style="display:none">
+			<div class="cmp-widgets-label" id="cmp-widgets-label"></div>
+			<div class="widgets">
+				<div class="widget">
+					<div class="widget-label">Potrošnja</div>
+					<div class="widget-vrow">
+						<div class="widget-value cons" id="w-cmp-cons">—</div>
+						<div class="widget-unit">kWh</div>
+					</div>
+					<div class="widget-delta" id="w-cmp-cons-delta"></div>
+				</div>
+				<div class="widget" id="wc-cmp-prod">
+					<div class="widget-label">Proizvodnja</div>
+					<div class="widget-vrow">
+						<div class="widget-value prod" id="w-cmp-prod">—</div>
+						<div class="widget-unit">kWh</div>
+					</div>
+					<div class="widget-delta" id="w-cmp-prod-delta"></div>
+				</div>
+				<div class="widget" id="wc-cmp-net">
+					<div class="widget-label">Neto bilanca</div>
+					<div class="widget-vrow">
+						<div class="widget-value" id="w-cmp-net">—</div>
+						<div class="widget-unit">kWh</div>
+					</div>
+					<div class="widget-delta" id="w-cmp-net-delta"></div>
+					<div class="widget-vtnt" id="wc-cmp-net-vtnt" style="display:none">
+						<div class="widget-vtnt-row">
+							<span class="widget-vtnt-label">VT</span>
+							<span class="widget-vtnt-value" id="w-cmp-net-vt">—</span>
+							<span class="widget-vtnt-unit">kWh</span>
+						</div>
+						<div class="widget-vtnt-row">
+							<span class="widget-vtnt-label">NT</span>
+							<span class="widget-vtnt-value" id="w-cmp-net-nt">—</span>
+							<span class="widget-vtnt-unit">kWh</span>
+						</div>
+					</div>
+				</div>
+				<div class="widget">
+					<div class="widget-label">Najveća potrošnja</div>
+					<div class="widget-vrow">
+						<div class="widget-value" id="w-cmp-peak-cons">—</div>
+						<div class="widget-unit">kWh</div>
+					</div>
+					<div class="widget-sub" id="w-cmp-peak-cons-day"></div>
+					<div class="widget-delta" id="w-cmp-peak-cons-delta"></div>
+				</div>
+				<div class="widget" id="wc-cmp-peak-prod">
+					<div class="widget-label">Najveća proizvodnja</div>
+					<div class="widget-vrow">
+						<div class="widget-value" id="w-cmp-peak-prod">—</div>
+						<div class="widget-unit">kWh</div>
+					</div>
+					<div class="widget-sub" id="w-cmp-peak-prod-day"></div>
+					<div class="widget-delta" id="w-cmp-peak-prod-delta"></div>
+				</div>
+			</div>
+		</div>
+		@charts.ChartHelpers()
+		<div class="chart-view">
+			@charts.DailyBarChart()
+		</div>
+		<div class="chart-view">
+			@charts.NetDiffDailyChart()
+		</div>
+		<div class="chart-view">
+			@charts.CurveLineChart()
+		</div>
+		<div class="chart-view">
+			@charts.NetDiffChart()
+		</div>
+		<div class="chart-view">
+			@charts.InsolationLineChart()
+		</div>
+		<div class="chart-view">
+			@charts.HourlyAvgChart()
+		</div>
+		<div class="table-section" id="tbl-daily">
+			<h2>Dnevna mjerenja (kWh)</h2>
+			<table class="data-table">
+				<thead>
+					<tr>
+						<th>Dan</th>
+						<th class="num">Potrošnja</th>
+						<th class="num col-prod-daily">Proizvodnja</th>
+						<th class="num col-net-daily">Neto</th>
+						<th class="num">Max potrošnja</th>
+						<th class="num col-prod-daily">Max proizvodnja</th>
+						<th class="num">Prosječna potrošnja</th>
+						<th class="num col-prod-daily">Prosječna proizvodnja</th>
+					</tr>
+				</thead>
+				<tbody id="t-daily-body"></tbody>
+			</table>
+		</div>
+		<div class="table-section" id="tbl-hourly">
+			<h2>Satni prosjeci (kWh)</h2>
+			<table class="data-table">
+				<thead>
+					<tr>
+						<th>Sat</th>
+						<th class="num">Potrošnja</th>
+						<th class="num col-prod-hourly">Proizvodnja</th>
+					</tr>
+				</thead>
+				<tbody id="t-hourly-body"></tbody>
+			</table>
+		</div>
+		<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+		<script src="https://cdn.jsdelivr.net/npm/hammerjs@2/hammer.min.js"></script>
+		<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2/dist/chartjs-plugin-zoom.min.js"></script>
+		<script>
+			var urlParams = new URLSearchParams(window.location.search);
+			var month = urlParams.get('month') || new Date().toISOString().slice(0, 7);
+			var code = urlParams.get('code') || '';
+			var isDark = document.documentElement.classList.contains('dark');
+
+			if (isDark) {
+				Chart.defaults.color = '#a0b4cc';
+				Chart.defaults.borderColor = 'rgba(255,255,255,0.08)';
+			}
+
+			function fmt2(n) { return n.toFixed(2).replace('.', ','); }
+
+			function setView(mode) {
+				localStorage.setItem('viewMode', mode);
+				var isChart = mode === 'charts';
+				document.querySelectorAll('.chart-view').forEach(function(el) { el.style.display = isChart ? '' : 'none'; });
+				document.querySelectorAll('.table-section').forEach(function(el) { el.style.display = isChart ? 'none' : 'block'; });
+				document.getElementById('btn-charts').classList.toggle('active', isChart);
+				document.getElementById('btn-tables').classList.toggle('active', !isChart);
+			}
+			setView(localStorage.getItem('viewMode') || 'charts');
+
+			var codeParam = code ? '&code=' + encodeURIComponent(code) : '';
+
+			var _primaryData = null;
+			var _primaryInsolation = null;
+			var _primaryTotalCons = 0, _primaryTotalProd = 0, _primaryHasProd = false;
+			var _primaryPeakCons = 0, _primaryPeakProd = 0;
+
+			// ── Compare month picker ──────────────────────────────────────────
+			var _cmpData = document.getElementById('cmp-data');
+			var _cmpSelected = ''; // empty = no comparison
+			var _cmpYear = null;
+			var _cmpOpen = false;
+			var _cmpAvailable = {};
+			var _cmpMinYear = 9999, _cmpMaxYear = 0;
+			var _cmpCurMonth = _mpSelected; // the primary selected month to exclude
+
+			if (_cmpData) {
+				JSON.parse(_cmpData.dataset.available).forEach(function(k) {
+					if (k !== _cmpCurMonth) { // exclude the currently viewed month
+						_cmpAvailable[k] = true;
+						var y = parseInt(k.split('-')[0]);
+						if (y < _cmpMinYear) _cmpMinYear = y;
+						if (y > _cmpMaxYear) _cmpMaxYear = y;
+					}
+				});
+				_cmpYear = _cmpMaxYear || parseInt(_cmpCurMonth.split('-')[0]);
+			}
+
+			var _crMonths = ['Sij','Velj','Ožu','Tra','Svi','Lip','Srp','Kol','Ruj','Lis','Stu','Pro'];
+
+			function cmpRender() {
+				document.getElementById('cmp-year-label').textContent = _cmpYear;
+				var grid = document.getElementById('cmp-grid');
+				if (!grid) return;
+				grid.innerHTML = '';
+				if (_cmpSelected) {
+					var clearBtn = document.createElement('button');
+					clearBtn.type = 'button';
+					clearBtn.textContent = '✕ ukloni usporedbu';
+					clearBtn.className = 'mp-month mp-available mp-clear';
+					clearBtn.style.gridColumn = '1 / -1';
+					clearBtn.onclick = function() { cmpClear(); };
+					grid.appendChild(clearBtn);
+				}
+				for (var m = 1; m <= 12; m++) {
+					var key = _cmpYear + '-' + (m < 10 ? '0' + m : m);
+					var btn = document.createElement('button');
+					btn.type = 'button';
+					btn.textContent = _crMonths[m - 1];
+					btn.className = 'mp-month';
+					if (key === _cmpSelected) btn.classList.add('mp-selected');
+					if (_cmpAvailable[key]) {
+						btn.classList.add('mp-available');
+						btn.onclick = (function(k) { return function() { cmpSelect(k); }; })(key);
+					} else {
+						btn.disabled = true;
+					}
+					grid.appendChild(btn);
+				}
+				var navBtns = document.querySelectorAll('#cmp-picker .mp-nav');
+				if (navBtns[0]) navBtns[0].disabled = _cmpYear <= _cmpMinYear;
+				if (navBtns[1]) navBtns[1].disabled = _cmpYear >= _cmpMaxYear;
+			}
+
+			function cmpClear() {
+				_cmpSelected = '';
+				_cmpOpen = false;
+				document.getElementById('cmp-picker').style.display = 'none';
+				var btn = document.getElementById('cmp-picker-btn');
+				btn.classList.remove('mp-btn-open');
+				btn.innerHTML = '— vs — <span class="mp-caret">▾</span>';
+				updateCompareMonth('');
+			}
+
+			function cmpToggle() {
+				if (!_cmpData) return;
+				_cmpOpen = !_cmpOpen;
+				var picker = document.getElementById('cmp-picker');
+				picker.style.display = _cmpOpen ? 'block' : 'none';
+				document.getElementById('cmp-picker-btn').classList.toggle('mp-btn-open', _cmpOpen);
+				if (_cmpOpen) cmpRender();
+			}
+
+			function cmpChangeYear(delta) {
+				_cmpYear = Math.max(_cmpMinYear, Math.min(_cmpMaxYear, _cmpYear + delta));
+				cmpRender();
+			}
+
+			function cmpSelect(key) {
+				_cmpOpen = false;
+				document.getElementById('cmp-picker').style.display = 'none';
+				document.getElementById('cmp-picker-btn').classList.remove('mp-btn-open');
+				_cmpSelected = key;
+				var label = _crMonths[Number(key.split('-')[1]) - 1] + ' ' + key.split('-')[0];
+				document.getElementById('cmp-picker-btn').innerHTML = label + ' <span class="mp-caret">▾</span>';
+				updateCompareMonth(key);
+			}
+
+			// Close compare picker when clicking outside.
+			document.addEventListener('click', function(e) {
+				var btn = document.getElementById('cmp-picker-btn');
+				var picker = document.getElementById('cmp-picker');
+				if (_cmpOpen && btn && picker && !btn.contains(e.target) && !picker.contains(e.target)) {
+					_cmpOpen = false;
+					picker.style.display = 'none';
+					btn.classList.remove('mp-btn-open');
+				}
+			});
+
+			function updateCmpWidgets(cmpData, label) {
+				var cmpCons = cmpData.consumption.reduce(function(s, d) { return s + d.value; }, 0);
+				var cmpProd = cmpData.production.reduce(function(s, d) { return s + d.value; }, 0);
+				var cmpNet = cmpProd - cmpCons;
+				var showProd = _primaryHasProd || cmpProd > 0;
+
+				document.getElementById('cmp-widgets-label').textContent = label;
+
+				document.getElementById('w-cmp-cons').textContent = fmt2(cmpCons);
+				var dCons = _primaryTotalCons - cmpCons;
+				var dConsEl = document.getElementById('w-cmp-cons-delta');
+				dConsEl.textContent = 'Δ ' + (dCons >= 0 ? '+' : '') + fmt2(dCons) + ' kWh';
+				dConsEl.className = 'widget-delta ' + (dCons >= 0 ? 'delta-pos' : 'delta-neg');
+
+				if (showProd) {
+					document.getElementById('w-cmp-prod').textContent = fmt2(cmpProd);
+					var dProd = _primaryTotalProd - cmpProd;
+					var dProdEl = document.getElementById('w-cmp-prod-delta');
+					dProdEl.textContent = 'Δ ' + (dProd >= 0 ? '+' : '') + fmt2(dProd) + ' kWh';
+					dProdEl.className = 'widget-delta ' + (dProd >= 0 ? 'delta-pos' : 'delta-neg');
+					document.getElementById('wc-cmp-prod').style.display = '';
+
+					var netEl = document.getElementById('w-cmp-net');
+					netEl.textContent = (cmpNet >= 0 ? '+' : '') + fmt2(cmpNet);
+					netEl.className = 'widget-value ' + (cmpNet >= 0 ? 'positive' : 'negative');
+					var primaryNet = _primaryTotalProd - _primaryTotalCons;
+					var dNet = primaryNet - cmpNet;
+					var dNetEl = document.getElementById('w-cmp-net-delta');
+					dNetEl.textContent = 'Δ ' + (dNet >= 0 ? '+' : '') + fmt2(dNet) + ' kWh';
+					dNetEl.className = 'widget-delta ' + (dNet >= 0 ? 'delta-pos' : 'delta-neg');
+					document.getElementById('wc-cmp-net').style.display = '';
+
+					var cmpHasVTNT = cmpData.tariff_model === 'bijeli' || cmpData.tariff_model === 'crveni';
+					if (cmpHasVTNT && cmpData.consumption_vt && cmpData.consumption_nt && cmpData.production_vt && cmpData.production_nt) {
+						var cmpConsVT = cmpData.consumption_vt.reduce(function(s, d) { return s + d.value; }, 0);
+						var cmpConsNT = cmpData.consumption_nt.reduce(function(s, d) { return s + d.value; }, 0);
+						var cmpProdVT = cmpData.production_vt.reduce(function(s, d) { return s + d.value; }, 0);
+						var cmpProdNT = cmpData.production_nt.reduce(function(s, d) { return s + d.value; }, 0);
+						var cmpNetVT = cmpProdVT - cmpConsVT;
+						var cmpNetNT = cmpProdNT - cmpConsNT;
+						document.getElementById('w-cmp-net-vt').textContent = (cmpNetVT >= 0 ? '+' : '') + fmt2(cmpNetVT);
+						document.getElementById('w-cmp-net-nt').textContent = (cmpNetNT >= 0 ? '+' : '') + fmt2(cmpNetNT);
+						document.getElementById('wc-cmp-net-vtnt').style.display = '';
+					} else {
+						document.getElementById('wc-cmp-net-vtnt').style.display = 'none';
+					}
+				} else {
+					document.getElementById('wc-cmp-prod').style.display = 'none';
+					document.getElementById('wc-cmp-net').style.display = 'none';
+				}
+
+				var cmpPeakCons = cmpData.consumption.reduce(function(m, d) { return d.value > m.value ? d : m; }, {day: null, value: 0});
+				if (cmpPeakCons.day !== null) {
+					document.getElementById('w-cmp-peak-cons').textContent = fmt2(cmpPeakCons.value);
+					document.getElementById('w-cmp-peak-cons-day').textContent = cmpPeakCons.day + '. u mjesecu';
+					var dPeakCons = _primaryPeakCons - cmpPeakCons.value;
+					var dPeakConsEl = document.getElementById('w-cmp-peak-cons-delta');
+					dPeakConsEl.textContent = 'Δ ' + (dPeakCons >= 0 ? '+' : '') + fmt2(dPeakCons) + ' kWh';
+					dPeakConsEl.className = 'widget-delta ' + (dPeakCons >= 0 ? 'delta-pos' : 'delta-neg');
+				}
+
+				if (showProd) {
+					var cmpPeakProd = cmpData.production.reduce(function(m, d) { return d.value > m.value ? d : m; }, {day: null, value: 0});
+					if (cmpPeakProd.day !== null) {
+						document.getElementById('w-cmp-peak-prod').textContent = fmt2(cmpPeakProd.value);
+						document.getElementById('w-cmp-peak-prod-day').textContent = cmpPeakProd.day + '. u mjesecu';
+						var dPeakProd = _primaryPeakProd - cmpPeakProd.value;
+						var dPeakProdEl = document.getElementById('w-cmp-peak-prod-delta');
+						dPeakProdEl.textContent = 'Δ ' + (dPeakProd >= 0 ? '+' : '') + fmt2(dPeakProd) + ' kWh';
+						dPeakProdEl.className = 'widget-delta ' + (dPeakProd >= 0 ? 'delta-pos' : 'delta-neg');
+					}
+					document.getElementById('wc-cmp-peak-prod').style.display = '';
+				} else {
+					document.getElementById('wc-cmp-peak-prod').style.display = 'none';
+				}
+
+				document.getElementById('cmp-widgets-section').style.display = '';
+			}
+
+			function clearCmpWidgets() {
+				document.getElementById('cmp-widgets-section').style.display = 'none';
+			}
+
+			function updateCompareMonth(cmpMonth) {
+				if (!_primaryData) return;
+				if (!cmpMonth) {
+					initDailyBarChart(_primaryData, month, isDark, _primaryInsolation, null, null);
+					initNetDiffDailyChart(_primaryData, month, isDark, null, null);
+					initCurveLineChart(_primaryData, month, isDark, null, null);
+					initNetDiffChart(_primaryData, month, isDark, null, null);
+					initInsolationLineChart(_primaryInsolation, month, isDark);
+					if (_primaryHourlyData) initHourlyAvgChart(_primaryHourlyData, isDark, null, null);
+					clearCmpWidgets();
+					return;
+				}
+				Promise.all([
+					fetch('/api/readings?month=' + cmpMonth + codeParam).then(function(r) { return r.json(); }),
+					fetch('/api/readings/hourly?month=' + cmpMonth + codeParam).then(function(r) { return r.json(); }),
+				]).then(function(results) {
+					var cmpData = results[0];
+					var cmpHourlyData = results[1];
+					initDailyBarChart(_primaryData, month, isDark, _primaryInsolation, cmpData, cmpMonth);
+					initNetDiffDailyChart(_primaryData, month, isDark, cmpData, cmpMonth);
+					initCurveLineChart(_primaryData, month, isDark, cmpData, cmpMonth);
+					initNetDiffChart(_primaryData, month, isDark, cmpData, cmpMonth);
+					if (_primaryHourlyData) initHourlyAvgChart(_primaryHourlyData, isDark, cmpHourlyData, cmpMonth);
+					updateCmpWidgets(cmpData, 'vs ' + _fmtMonthLabel(cmpMonth));
+				});
+			}
+
+			// Primary fetch: daily readings + insolation in parallel.
+			// Both are needed before initialising the daily bar chart (weather icons).
+			Promise.all([
+				fetch('/api/readings?month=' + month + codeParam).then(function(r) { return r.json(); }),
+				fetch('/api/insolation?month=' + month + codeParam).then(function(r) { return r.json(); }).catch(function() { return { days: [] }; })
+			]).then(function(results) {
+				var data = results[0];
+				var insolation = results[1];
+				_primaryData = data;
+				_primaryInsolation = insolation;
+
+				var totalCons = data.consumption.reduce(function(s, d) { return s + d.value; }, 0);
+				var totalProd = data.production.reduce(function(s, d) { return s + d.value; }, 0);
+				var net = totalProd - totalCons;
+				var hasProd = totalProd > 0;
+				_primaryTotalCons = totalCons;
+				_primaryTotalProd = totalProd;
+				_primaryHasProd = hasProd;
+
+				document.getElementById('w-cons').textContent = fmt2(totalCons);
+
+				var _tariffNames = { plavi: 'Plavi', bijeli: 'Bijeli', crveni: 'Crveni' };
+				var _tariffNotice = document.getElementById('tariff-notice');
+				if (_tariffNotice && data.tariff_model) {
+					var _tn = _tariffNames[data.tariff_model] || data.tariff_model;
+					_tariffNotice.innerHTML = 'Odabrani tarifni model za mjerno mjesto: <strong>' + _tn + '</strong>. Model možete promijeniti u <a href="/postavke">postavkama</a>.';
+					_tariffNotice.style.display = '';
+				}
+
+				var hasVTNT = data.tariff_model === 'bijeli' || data.tariff_model === 'crveni';
+				var totalVT = 0, totalNT = 0;
+				if (hasVTNT && data.consumption_vt && data.consumption_nt) {
+					totalVT = data.consumption_vt.reduce(function(s, d) { return s + d.value; }, 0);
+					totalNT = data.consumption_nt.reduce(function(s, d) { return s + d.value; }, 0);
+					document.getElementById('w-vt').textContent = fmt2(totalVT);
+					document.getElementById('w-nt').textContent = fmt2(totalNT);
+					document.getElementById('wc-vtnt').style.display = '';
+				}
+
+				if (hasProd) {
+					document.getElementById('w-prod').textContent = fmt2(totalProd);
+
+					var netEl = document.getElementById('w-net');
+					netEl.textContent = (net >= 0 ? '+' : '') + fmt2(net);
+					netEl.className = 'widget-value ' + (net >= 0 ? 'positive' : 'negative');
+					document.getElementById('w-net-sub').textContent = net >= 0 ? 'višak u mrežu' : 'neto uvoz iz mreže';
+
+					if (hasVTNT && data.production_vt && data.production_nt) {
+						var totalProdVT = data.production_vt.reduce(function(s, d) { return s + d.value; }, 0);
+						var totalProdNT = data.production_nt.reduce(function(s, d) { return s + d.value; }, 0);
+						document.getElementById('w-prod-vt').textContent = fmt2(totalProdVT);
+						document.getElementById('w-prod-nt').textContent = fmt2(totalProdNT);
+						document.getElementById('wc-prod-vtnt').style.display = '';
+						var netVT = totalProdVT - totalVT;
+						var netNT = totalProdNT - totalNT;
+						document.getElementById('w-net-vt').textContent = (netVT >= 0 ? '+' : '') + fmt2(netVT);
+						document.getElementById('w-net-nt').textContent = (netNT >= 0 ? '+' : '') + fmt2(netNT);
+						document.getElementById('wc-net-vtnt').style.display = '';
+					}
+				} else {
+					document.getElementById('wc-prod-vtnt').style.display = 'none';
+					document.getElementById('wc-prod').style.display = 'none';
+					document.getElementById('wc-net').style.display = 'none';
+					document.getElementById('wc-peak-prod').style.display = 'none';
+				}
+
+				var peakCons = data.consumption.reduce(function(m, d) { return d.value > m.value ? d : m; }, {day: null, value: 0});
+				if (peakCons.day !== null) {
+					document.getElementById('w-peak-cons').textContent = fmt2(peakCons.value);
+					document.getElementById('w-peak-cons-day').textContent = peakCons.day + '. u mjesecu';
+					_primaryPeakCons = peakCons.value;
+				}
+
+				if (hasProd) {
+					var peakProd = data.production.reduce(function(m, d) { return d.value > m.value ? d : m; }, {day: null, value: 0});
+					if (peakProd.day !== null) {
+						document.getElementById('w-peak-prod').textContent = fmt2(peakProd.value);
+						document.getElementById('w-peak-prod-day').textContent = peakProd.day + '. u mjesecu';
+						_primaryPeakProd = peakProd.value;
+					}
+				}
+
+				initDailyBarChart(data, month, isDark, insolation);
+				initNetDiffDailyChart(data, month, isDark, null, null);
+				initCurveLineChart(data, month, isDark, null, null);
+				initNetDiffChart(data, month, isDark, null, null);
+				initInsolationLineChart(insolation, month, isDark);
+
+				// Populate daily table
+				var parts = month.split('-');
+				var daysInMonth = new Date(Number(parts[0]), Number(parts[1]), 0).getDate();
+				var consMap = {}, prodMap = {};
+				data.consumption.forEach(function(d) { consMap[Number(d.day)] = d.value; });
+				data.production.forEach(function(d) { prodMap[Number(d.day)] = d.value; });
+
+				// Per-day max/avg from 15-min interval data
+				// time format: "DD.MM. HH:MM" — parseInt extracts the day number
+				var dayConsSlots = {}, dayProdSlots = {};
+				(data.all_consumption || []).forEach(function(d) {
+					var day = parseInt(d.time, 10);
+					if (!dayConsSlots[day]) dayConsSlots[day] = [];
+					dayConsSlots[day].push(d.value);
+				});
+				(data.all_production || []).forEach(function(d) {
+					var day = parseInt(d.time, 10);
+					if (!dayProdSlots[day]) dayProdSlots[day] = [];
+					dayProdSlots[day].push(d.value);
+				});
+				function slotMax(slots) { return slots && slots.length ? Math.max.apply(null, slots) : 0; }
+				function slotAvg(slots) { return slots && slots.length ? slots.reduce(function(s, v) { return s + v; }, 0) / slots.length : 0; }
+
+				var tHtml = '';
+				for (var di = 1; di <= daysInMonth; di++) {
+					var c = consMap[di] || 0, p = prodMap[di] || 0, dn = p - c;
+					tHtml += '<tr><td>' + di + '.</td>';
+					tHtml += '<td class="num cons">' + fmt2(c) + '</td>';
+					if (hasProd) {
+						tHtml += '<td class="num prod">' + fmt2(p) + '</td>';
+						tHtml += '<td class="num ' + (dn >= 0 ? 'pos' : 'neg') + '">' + (dn >= 0 ? '+' : '') + fmt2(dn) + '</td>';
+					}
+					tHtml += '<td class="num">' + fmt2(slotMax(dayConsSlots[di])) + '</td>';
+					if (hasProd) tHtml += '<td class="num">' + fmt2(slotMax(dayProdSlots[di])) + '</td>';
+					tHtml += '<td class="num">' + fmt2(slotAvg(dayConsSlots[di])) + '</td>';
+					if (hasProd) tHtml += '<td class="num">' + fmt2(slotAvg(dayProdSlots[di])) + '</td>';
+					tHtml += '</tr>';
+				}
+				document.getElementById('t-daily-body').innerHTML = tHtml;
+				if (!hasProd) {
+					document.querySelectorAll('.col-prod-daily, .col-net-daily').forEach(function(el) { el.style.display = 'none'; });
+				}
+			});
+
+			// Hourly average profile
+			window._hourlyPrimaryMonth = month;
+			var _primaryHourlyData = null;
+			fetch('/api/readings/hourly?month=' + month + codeParam)
+				.then(function(r) { return r.json(); })
+				.then(function(data) {
+					_primaryHourlyData = data;
+					initHourlyAvgChart(data, isDark, null, null);
+
+					// Populate hourly table
+					var hourMap = {}, prodHourMap = {};
+					data.consumption.forEach(function(d) { hourMap[Number(d.day)] = d.value; });
+					data.production.forEach(function(d) { prodHourMap[Number(d.day)] = d.value; });
+					var hasProdHourly = data.production.some(function(d) { return d.value > 0; });
+					var hHtml = '';
+					for (var h = 0; h < 24; h++) {
+						var label = (h < 10 ? '0' + h : h) + ':00';
+						var hc = hourMap[h] || 0, hp = prodHourMap[h] || 0;
+						hHtml += '<tr><td>' + label + '</td>';
+						hHtml += '<td class="num cons">' + fmt2(hc) + '</td>';
+						if (hasProdHourly) hHtml += '<td class="num prod">' + fmt2(hp) + '</td>';
+						hHtml += '</tr>';
+					}
+					document.getElementById('t-hourly-body').innerHTML = hHtml;
+					if (!hasProdHourly) {
+						document.querySelectorAll('.col-prod-hourly').forEach(function(el) { el.style.display = 'none'; });
+					}
+				});
+		</script>
+	}
+}

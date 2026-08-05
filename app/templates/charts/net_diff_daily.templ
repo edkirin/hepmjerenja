@@ -1,0 +1,109 @@
+package charts
+
+// NetDiffDailyChart renders the daily net (production − consumption) bar chart container.
+// Call initNetDiffDailyChart(data, month, isDark) after Chart.js is loaded and data is fetched.
+// Expected data shape: { consumption: [{day, value}], production: [{day, value}] }
+// Requires ChartHelpers() to be rendered first (uses kwhLabel).
+// Bars are coloured green for surplus days and red for deficit days.
+// The Y axis is centred on zero.
+templ NetDiffDailyChart() {
+	<div class="chart-section">
+		<div class="chart-header">
+			<h2>Neto (Proizvodnja &#x2212; Potrošnja) — dnevni zbroj (kWh)</h2>
+			<div class="chart-header-right">
+				<button id="export-daily-diff" class="chart-export-btn">↓ XLSX</button>
+				<button id="export-daily-diff-png" class="chart-export-btn">↓ PNG</button>
+			</div>
+		</div>
+		<canvas id="daily-diff-chart"></canvas>
+	</div>
+	<script>
+		var _netDiffDailyChart = null;
+
+		// compareData: same shape as data, or null. compareMonth: "YYYY-MM" or null.
+		function initNetDiffDailyChart(data, month, isDark, compareData, compareMonth) {
+			if (_netDiffDailyChart) { _netDiffDailyChart.destroy(); _netDiffDailyChart = null; }
+
+			var parts = month.split('-');
+			var daysInMonth = new Date(Number(parts[0]), Number(parts[1]), 0).getDate();
+			var days = [];
+			for (var d = 1; d <= daysInMonth; d++) { days.push(d); }
+
+			function valuesFor(series) {
+				var map = {};
+				series.forEach(function(d) { map[Number(d.day)] = d.value; });
+				return days.map(function(day) { return map[day] || 0; });
+			}
+
+			var consValues = valuesFor(data.consumption);
+			var prodValues = valuesFor(data.production);
+			var diffValues = days.map(function(_, i) { return prodValues[i] - consValues[i]; });
+
+			var withCompare = !!compareData;
+			var datasets = [{
+				label: withCompare ? 'Neto ' + _fmtMonthLabel(month) : 'Neto',
+				data: diffValues,
+				backgroundColor: diffValues.map(function(v) {
+					return v >= 0 ? 'rgba(39, 174, 96, 0.85)' : 'rgba(192, 57, 43, 0.85)';
+				}),
+				borderRadius: 3,
+			}];
+
+			var maxAbsDiff = diffValues.reduce(function(m, v) { return Math.max(m, Math.abs(v)); }, 0);
+
+			if (withCompare) {
+				var cmpConsValues = valuesFor(compareData.consumption);
+				var cmpProdValues = valuesFor(compareData.production);
+				var cmpDiffValues = days.map(function(_, i) { return cmpProdValues[i] - cmpConsValues[i]; });
+				maxAbsDiff = cmpDiffValues.reduce(function(m, v) { return Math.max(m, Math.abs(v)); }, maxAbsDiff);
+				datasets.push({
+					label: 'Neto ' + _fmtMonthLabel(compareMonth),
+					data: cmpDiffValues,
+					backgroundColor: cmpDiffValues.map(function(v) {
+						return v >= 0 ? 'rgba(39, 174, 96, 0.35)' : 'rgba(192, 57, 43, 0.35)';
+					}),
+					borderRadius: 3,
+				});
+			}
+
+			var yMax = maxAbsDiff > 0 ? maxAbsDiff * 1.05 : 1;
+
+			_netDiffDailyChart = new Chart(document.getElementById('daily-diff-chart'), {
+				type: 'bar',
+				data: {
+					labels: days,
+					datasets: datasets,
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					plugins: {
+						legend: { display: withCompare },
+						tooltip: { callbacks: { label: kwhLabel } }
+					},
+					scales: {
+						x: { grid: { display: false } },
+						y: {
+							min: -yMax,
+							max: yMax,
+							title: { display: true, text: 'kWh' }
+						}
+					}
+				}
+			});
+
+			// Export
+			document.getElementById('export-daily-diff-png').addEventListener('click', function() {
+				downloadPng(_netDiffDailyChart.canvas, 'mjerenja-neto-dnevno-' + month + '.png');
+			});
+
+			document.getElementById('export-daily-diff').addEventListener('click', function() {
+				var rows = [['Dan', 'Potrošnja (kWh)', 'Proizvodnja (kWh)', 'Neto (kWh)']];
+				days.forEach(function(day, i) {
+					rows.push([day, consValues[i], prodValues[i], diffValues[i]]);
+				});
+				exportXlsx('mjerenja-neto-dnevno-' + month + '.xlsx', rows);
+			});
+		}
+	</script>
+}

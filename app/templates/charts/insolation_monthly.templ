@@ -1,0 +1,143 @@
+package charts
+
+// InsolationMonthlyChart renders the yearly insolation (radiation + temperature) chart.
+// Call initInsolationMonthlyChart(insolation, year, isDark) after data is fetched.
+// insolation: { months: [{month, radiation, temp_max, temp_min}] } or null / empty
+templ InsolationMonthlyChart() {
+	<div id="wc-insolation-yearly" style="display:none">
+		<div class="chart-section">
+			<div class="chart-header">
+				<h2>Sunčevo zračenje — mjesečni zbroj (MJ/m²)</h2>
+				<div class="chart-header-right">
+					<button id="export-insolation-yearly-png" class="chart-export-btn">↓ PNG</button>
+				</div>
+			</div>
+			<canvas id="insolation-monthly-chart"></canvas>
+		</div>
+	</div>
+	<script>
+		var _insolationMonthlyChart = null;
+
+		function initInsolationMonthlyChart(insolation, year, isDark) {
+			if (_insolationMonthlyChart) { _insolationMonthlyChart.destroy(); _insolationMonthlyChart = null; }
+
+			var months = insolation && insolation.months ? insolation.months : [];
+			var section = document.getElementById('wc-insolation-yearly');
+			if (!months.length) {
+				section.style.display = 'none';
+				section.dataset.hasData = '0';
+				return;
+			}
+
+			var inChartsView = localStorage.getItem('viewMode') !== 'tables';
+			section.style.display = inChartsView ? '' : 'none';
+			section.dataset.hasData = '1';
+
+			var labels = typeof croatianMonths !== 'undefined'
+				? croatianMonths
+				: ['Sij','Velj','Ožu','Tra','Svi','Lip','Srp','Kol','Ruj','Lis','Stu','Pro'];
+
+			var radMap = {}, maxMap = {}, minMap = {};
+			months.forEach(function(m) {
+				radMap[m.month] = m.radiation;
+				maxMap[m.month] = m.temp_max;
+				minMap[m.month] = m.temp_min;
+			});
+
+			var radValues = [1,2,3,4,5,6,7,8,9,10,11,12].map(function(m) { return radMap[m] != null ? radMap[m] : null; });
+			var maxValues = [1,2,3,4,5,6,7,8,9,10,11,12].map(function(m) { return maxMap[m] != null ? maxMap[m] : null; });
+			var minValues = [1,2,3,4,5,6,7,8,9,10,11,12].map(function(m) { return minMap[m] != null ? minMap[m] : null; });
+
+			var gridColor  = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+			var labelColor = isDark ? '#cdd8e3' : '#444';
+
+			_insolationMonthlyChart = new Chart(document.getElementById('insolation-monthly-chart'), {
+				data: {
+					labels: labels,
+					datasets: [
+						{
+							type: 'bar',
+							label: 'Zračenje (MJ/m²)',
+							data: radValues,
+							yAxisID: 'y',
+							backgroundColor: 'rgba(230, 160, 20, 0.55)',
+							borderColor: 'rgba(230, 160, 20, 0.85)',
+							borderWidth: 1,
+							order: 2,
+						},
+						{
+							type: 'line',
+							label: 'Prosječna najviša temperatura (°C)',
+							data: maxValues,
+							yAxisID: 'yTemp',
+							borderColor: 'rgba(192, 57, 43, 0.75)',
+							backgroundColor: 'transparent',
+							borderWidth: 1.5,
+							pointRadius: 3,
+							fill: false,
+							tension: 0.3,
+							spanGaps: true,
+							borderDash: [4, 3],
+							order: 1,
+						},
+						{
+							type: 'line',
+							label: 'Prosječna najniža temperatura (°C)',
+							data: minValues,
+							yAxisID: 'yTemp',
+							borderColor: 'rgba(52, 152, 219, 0.75)',
+							backgroundColor: 'transparent',
+							borderWidth: 1.5,
+							pointRadius: 3,
+							fill: false,
+							tension: 0.3,
+							spanGaps: true,
+							borderDash: [4, 3],
+							order: 1,
+						},
+					],
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: true,
+					interaction: { mode: 'index', intersect: false },
+					plugins: {
+						legend: { display: true, position: 'top' },
+						tooltip: {
+							callbacks: {
+								label: function(ctx) {
+									if (ctx.dataset.yAxisID === 'y') {
+										return ctx.dataset.label + ': ' + (ctx.parsed.y != null ? ctx.parsed.y.toFixed(1).replace('.', ',') : '—') + ' MJ/m²';
+									}
+									return ctx.dataset.label + ': ' + (ctx.parsed.y != null ? ctx.parsed.y.toFixed(1).replace('.', ',') : '—') + ' °C';
+								}
+							}
+						}
+					},
+					scales: {
+						x: {
+							grid: { color: gridColor },
+							ticks: { color: labelColor },
+						},
+						y: {
+							beginAtZero: true,
+							grid: { color: gridColor },
+							ticks: { color: labelColor },
+							title: { display: true, text: 'MJ/m²', color: labelColor },
+						},
+						yTemp: {
+							position: 'right',
+							grid: { drawOnChartArea: false },
+							ticks: { color: labelColor },
+							title: { display: true, text: '°C', color: labelColor },
+						},
+					},
+				},
+			});
+
+			document.getElementById('export-insolation-yearly-png').onclick = function() {
+				downloadPng(_insolationMonthlyChart.canvas, 'mjerenja-zracenje-' + year + '.png');
+			};
+		}
+	</script>
+}

@@ -1,0 +1,245 @@
+package charts
+
+// CurveLineChart renders the 15-minute consumption/production line chart container.
+// Call initCurveLineChart(data, month, isDark) after Chart.js is loaded and data is fetched.
+// Expected data shape: { all_consumption: [{time, value}], all_production: [{time, value}] }
+// Requires ChartHelpers() to be rendered first (uses buildTimeAxis, buildCrosshairPlugin, kwhLabel).
+templ CurveLineChart() {
+	<div class="chart-section">
+		<div class="chart-header">
+			<h2>Potrošnja i Proizvodnja — sva mjerenja (kWh)</h2>
+			<div class="chart-header-right">
+				<div id="vtnt-legend-curve" class="vtnt-legend" style="display:none">
+					<span class="vtnt-legend-item"><span class="vtnt-legend-swatch vtnt-vt"></span>VT</span>
+					<span class="vtnt-legend-item"><span class="vtnt-legend-swatch vtnt-nt"></span>NT</span>
+				</div>
+				<select id="day-select-curve" class="chart-day-select">
+					<option value="">— cijeli mjesec —</option>
+				</select>
+				<button id="export-curve" class="chart-export-btn">↓ XLSX</button>
+				<button id="export-curve-png" class="chart-export-btn">↓ PNG</button>
+			</div>
+		</div>
+		<div style="position:relative;height:400px">
+			<canvas id="curve-chart"></canvas>
+			<button id="reset-zoom" style="display:none;position:absolute;top:8px;right:8px;background:#2c3e50;color:#fff;border:none;padding:0.4rem 0.75rem;border-radius:4px;cursor:pointer;font-size:0.85rem;">Reset</button>
+		</div>
+	</div>
+	<script>
+		var _curveLineChart = null;
+
+		// compareData: same shape as data, or null. compareMonth: "YYYY-MM" or null.
+		function initCurveLineChart(data, month, isDark, compareData, compareMonth) {
+			if (_curveLineChart) { _curveLineChart.destroy(); _curveLineChart = null; }
+
+			var axis = buildTimeAxis(month);
+			var times = axis.times;
+			var vtntRanges = buildVTNTRangesFromTimes(times, month, data.tariff_model);
+			var vtntPlugin  = buildVTNTPlugin(vtntRanges, isDark);
+			var vtntLegendCurve = document.getElementById('vtnt-legend-curve');
+			if (vtntLegendCurve) vtntLegendCurve.style.display = vtntPlugin ? '' : 'none';
+
+			var parts = month.split('-');
+			var daysInMonth = new Date(Number(parts[0]), Number(parts[1]), 0).getDate();
+			var slotsPerDay = 96;
+
+			function curveValuesFor(series) {
+				var map = {};
+				series.forEach(function(d) { map[d.time] = d.value; });
+				return times.map(function(t) { return map[t] !== undefined ? map[t] : null; });
+			}
+
+			// For comparison data: align by slot position (day N slot K → same index as primary).
+			// Sort comparison series by time string, then map positionally onto primary's times array.
+			function cmpValuesFor(series) {
+				var sorted = series.slice().sort(function(a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+				return times.map(function(_, i) { return sorted[i] !== undefined ? sorted[i].value : null; });
+			}
+
+			var withCompare = !!compareData;
+
+			// Fix Y range from full dataset so the axis stays stable when zooming on X.
+			var allValues = curveValuesFor(data.all_consumption).concat(curveValuesFor(data.all_production))
+				.filter(function(v) { return v !== null; });
+			if (withCompare) {
+				allValues = allValues.concat(
+					cmpValuesFor(compareData.all_consumption).concat(cmpValuesFor(compareData.all_production))
+						.filter(function(v) { return v !== null; })
+				);
+			}
+			var globalYMax = (allValues.length > 0 ? Math.max.apply(null, allValues) : 1) * 1.05;
+
+			var crosshairPlugin = buildCrosshairPlugin(axis.midnightIndices, isDark);
+
+			var resetBtn = document.getElementById('reset-zoom');
+			var daySelect = document.getElementById('day-select-curve');
+
+			// Populate day options (clear first on re-init).
+			daySelect.innerHTML = '<option value="">— cijeli mjesec —</option>';
+			for (var d = 1; d <= daysInMonth; d++) {
+				var opt = document.createElement('option');
+				opt.value = d;
+				opt.textContent = d + '.';
+				daySelect.appendChild(opt);
+			}
+
+			var datasets = [
+				{
+					label: withCompare ? 'Potrošnja ' + _fmtMonthLabel(month) : 'Potrošnja',
+					data: curveValuesFor(data.all_consumption),
+					borderColor: 'rgba(192, 57, 43, 0.85)',
+					backgroundColor: 'rgba(192, 57, 43, 0.1)',
+					borderWidth: 1,
+					pointRadius: 0,
+					fill: true,
+					spanGaps: false,
+				},
+				{
+					label: withCompare ? 'Proizvodnja ' + _fmtMonthLabel(month) : 'Proizvodnja',
+					data: curveValuesFor(data.all_production),
+					borderColor: 'rgba(39, 174, 96, 0.85)',
+					backgroundColor: 'rgba(39, 174, 96, 0.1)',
+					borderWidth: 1,
+					pointRadius: 0,
+					fill: true,
+					spanGaps: false,
+				},
+			];
+
+			if (withCompare) {
+				datasets.push({
+					label: 'Potrošnja ' + _fmtMonthLabel(compareMonth),
+					data: cmpValuesFor(compareData.all_consumption),
+					borderColor: 'rgba(192, 57, 43, 0.4)',
+					backgroundColor: 'transparent',
+					borderWidth: 1,
+					borderDash: [4, 3],
+					pointRadius: 0,
+					fill: false,
+					spanGaps: false,
+				});
+				datasets.push({
+					label: 'Proizvodnja ' + _fmtMonthLabel(compareMonth),
+					data: cmpValuesFor(compareData.all_production),
+					borderColor: 'rgba(39, 174, 96, 0.4)',
+					backgroundColor: 'transparent',
+					borderWidth: 1,
+					borderDash: [4, 3],
+					pointRadius: 0,
+					fill: false,
+					spanGaps: false,
+				});
+			}
+
+			_curveLineChart = new Chart(document.getElementById('curve-chart'), {
+				type: 'line',
+				plugins: vtntPlugin ? [vtntPlugin, crosshairPlugin] : [crosshairPlugin],
+				data: {
+					labels: times,
+					datasets: datasets,
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					animation: false,
+					plugins: {
+						legend: { display: withCompare, position: 'top' },
+						tooltip: {
+							mode: 'index',
+							intersect: false,
+							callbacks: { label: kwhLabel }
+						},
+						zoom: {
+							zoom: {
+								drag: {
+									enabled: true,
+									backgroundColor: 'rgba(44,62,80,0.15)',
+									borderColor: 'rgba(44,62,80,0.4)',
+									borderWidth: 1,
+								},
+								mode: 'x',
+								onZoomComplete: function(ctx) {
+									resetBtn.style.display = 'block';
+									ctx.chart.options.plugins.zoom.zoom.drag.enabled = false;
+									ctx.chart.options.plugins.zoom.pan.enabled = true;
+									ctx.chart.update('none');
+								}
+							},
+							pan: { enabled: false, mode: 'x' }
+						}
+					},
+					scales: {
+						x: {
+							grid: { display: false },
+							ticks: {
+								maxTicksLimit: 16,
+								maxRotation: 0,
+								callback: function(value) {
+									var label = times[value];
+									if (!label) return '';
+									var sp = label.indexOf(' ');
+									return (this.max - this.min) > 200
+										? parseInt(label, 10)
+										: label.substring(sp + 1);
+								}
+							}
+						},
+						y: {
+							min: 0,
+							max: globalYMax,
+							title: { display: true, text: 'kWh' }
+						}
+					}
+				}
+			});
+
+			function zoomToDay(day) {
+				var startIdx = (day - 1) * slotsPerDay;
+				var endIdx = Math.min(day * slotsPerDay - 1, times.length - 1);
+				_curveLineChart.zoomScale('x', {min: startIdx, max: endIdx});
+				_curveLineChart.options.plugins.zoom.zoom.drag.enabled = false;
+				_curveLineChart.options.plugins.zoom.pan.enabled = true;
+				_curveLineChart.update('none');
+				resetBtn.style.display = 'block';
+			}
+
+			function resetZoom() {
+				_curveLineChart.resetZoom();
+				_curveLineChart.options.plugins.zoom.zoom.drag.enabled = true;
+				_curveLineChart.options.plugins.zoom.pan.enabled = false;
+				_curveLineChart.update('none');
+				resetBtn.style.display = 'none';
+				daySelect.value = '';
+			}
+
+			daySelect.addEventListener('change', function() {
+				var day = Number(this.value);
+				if (!day) { resetZoom(); } else { zoomToDay(day); }
+			});
+
+			resetBtn.addEventListener('click', resetZoom);
+
+			// Export (primary month only)
+			var consMap = {};
+			data.all_consumption.forEach(function(d) { consMap[d.time] = d.value; });
+			var prodMap = {};
+			data.all_production.forEach(function(d) { prodMap[d.time] = d.value; });
+
+			document.getElementById('export-curve-png').addEventListener('click', function() {
+				downloadPng(_curveLineChart.canvas, 'mjerenja-krivulja-' + month + '.png');
+			});
+
+			document.getElementById('export-curve').addEventListener('click', function() {
+				var rows = [['Vrijeme', 'Potrošnja (kWh)', 'Proizvodnja (kWh)']];
+				times.forEach(function(t) {
+					var c = consMap[t];
+					var p = prodMap[t];
+					if (c !== undefined || p !== undefined) {
+						rows.push([t, c !== undefined ? c : '', p !== undefined ? p : '']);
+					}
+				});
+				exportXlsx('mjerenja-krivulja-' + month + '.xlsx', rows);
+			});
+		}
+	</script>
+}

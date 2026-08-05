@@ -1,0 +1,346 @@
+package charts
+
+// DailyBarChart renders the daily consumption/production bar chart container.
+// Call initDailyBarChart(data, month, isDark, insolation) after Chart.js is loaded and data is fetched.
+// Expected data shape: { consumption: [{day, value}], production: [{day, value}] }
+// insolation: { days: [{day, weathercode, radiation, sunrise, sunset, temp_max, temp_min}] } or null
+templ DailyBarChart() {
+	<div class="chart-section">
+		<div class="chart-header">
+			<h2>Potrošnja i Proizvodnja — dnevni zbroj (kWh)</h2>
+			<div class="chart-header-right">
+				<button id="export-daily-bar" class="chart-export-btn">↓ XLSX</button>
+				<button id="export-daily-bar-png" class="chart-export-btn">↓ PNG</button>
+			</div>
+		</div>
+		<canvas id="daily-chart"></canvas>
+	</div>
+	<script>
+		var _dailyBarChart = null;
+		var _dailyBarExportFn = null;
+
+		// Format "YYYY-MM" → "Tra 2025" for legend labels.
+		function _fmtMonthLabel(ym) {
+			var cr = ['Sij','Velj','Ožu','Tra','Svi','Lip','Srp','Kol','Ruj','Lis','Stu','Pro'];
+			var p = ym.split('-');
+			return cr[Number(p[1]) - 1] + ' ' + p[0];
+		}
+
+		// compareData: same shape as data, or null. compareMonth: "YYYY-MM" or null.
+		function initDailyBarChart(data, month, isDark, insolation, compareData, compareMonth) {
+			if (_dailyBarChart) { _dailyBarChart.destroy(); _dailyBarChart = null; }
+			var parts = month.split('-');
+			var daysInMonth = new Date(Number(parts[0]), Number(parts[1]), 0).getDate();
+			var days = [];
+			for (var d = 1; d <= daysInMonth; d++) { days.push(d); }
+
+			function valuesFor(series) {
+				var map = {};
+				series.forEach(function(d) { map[Number(d.day)] = d.value; });
+				return days.map(function(day) { return map[day] || 0; });
+			}
+
+			// Build day → weathercode and day → full insolation record lookups.
+			var wcMap = {};
+			var insolationByDay = {};
+			if (insolation && insolation.days) {
+				insolation.days.forEach(function(d) {
+					wcMap[d.day] = d.weathercode;
+					insolationByDay[d.day] = d;
+				});
+			}
+
+			function wmoIcon(code) {
+				if (code === undefined || code === null) return '';
+				if (code === 0)  return '\u2600\uFE0F';
+				if (code <= 1)   return '\uD83C\uDF24\uFE0F';
+				if (code <= 2)   return '\u26C5';
+				if (code <= 3)   return '\u2601\uFE0F';
+				if (code <= 48)  return '\uD83C\uDF2B\uFE0F';
+				if (code <= 57)  return '\uD83C\uDF26\uFE0F';
+				if (code <= 67)  return '\uD83C\uDF27\uFE0F';
+				if (code <= 77)  return '\uD83C\uDF28\uFE0F';
+				if (code <= 82)  return '\uD83C\uDF26\uFE0F';
+				if (code <= 86)  return '\uD83C\uDF28\uFE0F';
+				if (code <= 99)  return '\u26C8\uFE0F';
+				return '';
+			}
+
+			function wmoDescription(code) {
+				if (code === undefined || code === null) return '';
+				if (code === 0)  return 'Vedro';
+				if (code === 1)  return 'Pretežno vedro';
+				if (code === 2)  return 'Djelomično oblačno';
+				if (code === 3)  return 'Oblačno';
+				if (code <= 9)   return 'Sumaglica';
+				if (code <= 19)  return 'Nagli vremenski fenomeni';
+				if (code <= 29)  return 'Oluja u blizini';
+				if (code <= 39)  return 'Pješčana oluja';
+				if (code === 45) return 'Magla';
+				if (code === 48) return 'Magla sa mrazom';
+				if (code <= 49)  return 'Magla';
+				if (code === 51) return 'Slaba rosulja';
+				if (code === 53) return 'Umjerena rosulja';
+				if (code === 55) return 'Gusta rosulja';
+				if (code === 56) return 'Slaba ledena rosulja';
+				if (code === 57) return 'Gusta ledena rosulja';
+				if (code === 61) return 'Slaba kiša';
+				if (code === 63) return 'Umjerena kiša';
+				if (code === 65) return 'Jaka kiša';
+				if (code === 66) return 'Slaba ledena kiša';
+				if (code === 67) return 'Jaka ledena kiša';
+				if (code === 71) return 'Slab snijeg';
+				if (code === 73) return 'Umjeren snijeg';
+				if (code === 75) return 'Jak snijeg';
+				if (code === 77) return 'Zrna snijega';
+				if (code === 80) return 'Slabi pljuskovi';
+				if (code === 81) return 'Umjereni pljuskovi';
+				if (code === 82) return 'Jaki pljuskovi';
+				if (code === 85) return 'Slabi snježni pljuskovi';
+				if (code === 86) return 'Jaki snježni pljuskovi';
+				if (code === 95) return 'Grmljavinska oluja';
+				if (code === 96) return 'Oluja s tučom';
+				if (code === 99) return 'Oluja s jakom tučom';
+				return 'Nepoznato';
+			}
+
+			var hasIcons = Object.keys(wcMap).length > 0;
+			var iconSize = 18;
+			var iconHitAreas = []; // [{x, y, r, day}] rebuilt each afterDraw
+
+			// Tooltip element — created once per chart init.
+			var tooltip = document.createElement('div');
+			tooltip.style.cssText = 'position:fixed;pointer-events:none;display:none;background:rgba(30,30,30,0.92);color:#fff;border-radius:8px;padding:8px 12px;font-size:13px;line-height:1.7;white-space:nowrap;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,0.4)';
+			document.body.appendChild(tooltip);
+
+			// Inline plugin: draws weather emoji at iconSize below the day-number tick labels.
+			var wmoIconsPlugin = {
+				id: 'wmoIcons',
+				afterDraw: function(chart) {
+					if (!hasIcons) return;
+					iconHitAreas = [];
+					var ctx = chart.ctx;
+					var xAxis = chart.scales.x;
+					ctx.save();
+					ctx.font = iconSize + 'px sans-serif';
+					ctx.textAlign = 'center';
+					ctx.textBaseline = 'alphabetic';
+					for (var i = 0; i < days.length; i++) {
+						var day = days[i];
+						var icon = wmoIcon(wcMap[day]);
+						if (!icon) continue;
+						var x = xAxis.getPixelForTick(i);
+						var y = xAxis.bottom - 2;
+						ctx.fillText(icon, x, y);
+						// hit area centred on the emoji glyph
+						iconHitAreas.push({ x: x, y: y - iconSize * 0.55, r: iconSize * 0.7, day: day });
+					}
+					ctx.restore();
+				}
+			};
+
+			var canvas = document.getElementById('daily-chart');
+
+			canvas.addEventListener('mousemove', function(e) {
+				if (!hasIcons || iconHitAreas.length === 0) return;
+				var rect = canvas.getBoundingClientRect();
+				var mx = e.clientX - rect.left;
+				var my = e.clientY - rect.top;
+				var hit = null;
+				for (var i = 0; i < iconHitAreas.length; i++) {
+					var a = iconHitAreas[i];
+					var dx = mx - a.x, dy = my - a.y;
+					if (Math.sqrt(dx * dx + dy * dy) <= a.r + 4) { hit = a; break; }
+				}
+				if (!hit) { tooltip.style.display = 'none'; return; }
+				var ins = insolationByDay[hit.day];
+				if (!ins) { tooltip.style.display = 'none'; return; }
+				var lines = [
+					'<strong>' + wmoIcon(ins.weathercode) + ' ' + wmoDescription(ins.weathercode) + '</strong>',
+					'\uD83C\uDF21\uFE0F\u00A0' + ins.temp_min + '\u2013' + ins.temp_max + '\u00B0C',
+				];
+				if (ins.sunrise) {
+					lines.push('\uD83C\uDF05\u00A0' + ins.sunrise + '\u2003\uD83C\uDF07\u00A0' + ins.sunset);
+				}
+				if (ins.radiation) {
+					lines.push('\u2600\uFE0F\u00A0' + ins.radiation.toFixed(1) + '\u00A0MJ/m\u00B2');
+				}
+				tooltip.innerHTML = lines.join('<br>');
+				tooltip.style.display = 'block';
+				// keep tooltip inside viewport
+				var tx = e.clientX + 16;
+				if (tx + 200 > window.innerWidth) tx = e.clientX - 16 - tooltip.offsetWidth;
+				tooltip.style.left = tx + 'px';
+				tooltip.style.top  = (e.clientY - 14) + 'px';
+			});
+
+			canvas.addEventListener('mouseleave', function() { tooltip.style.display = 'none'; });
+
+			var consValues = valuesFor(data.consumption);
+			var prodValues = valuesFor(data.production);
+
+			var withCompare = !!compareData;
+			var cmpConsValues = withCompare ? valuesFor(compareData.consumption) : null;
+			var cmpProdValues = withCompare ? valuesFor(compareData.production) : null;
+
+			// Use stacked VT/NT only for primary month (not while comparing).
+			var hasVTNT = !withCompare &&
+				(data.tariff_model === 'bijeli' || data.tariff_model === 'crveni') &&
+				data.consumption_vt && data.consumption_vt.length > 0;
+
+			var consVTValues = null, consNTValues = null, prodVTValues = null, prodNTValues = null;
+			var hasProdVTNT = false;
+			if (hasVTNT) {
+				consVTValues = valuesFor(data.consumption_vt);
+				consNTValues = valuesFor(data.consumption_nt);
+				if (data.production_vt && data.production_vt.length > 0) {
+					prodVTValues = valuesFor(data.production_vt);
+					prodNTValues = valuesFor(data.production_nt);
+					hasProdVTNT = true;
+				}
+			}
+
+			var datasets;
+			if (hasVTNT) {
+				datasets = [
+					{
+						label: 'Potrošnja VT',
+						data: consVTValues,
+						backgroundColor: 'rgba(192, 57, 43, 0.88)',
+						stack: 'cons',
+						borderRadius: 0,
+						borderSkipped: false,
+					},
+					{
+						label: 'Potrošnja NT',
+						data: consNTValues,
+						backgroundColor: 'rgba(192, 57, 43, 0.45)',
+						stack: 'cons',
+						borderRadius: { topLeft: 4, topRight: 4 },
+						borderSkipped: false,
+					},
+				];
+				if (hasProdVTNT) {
+					datasets.push({
+						label: 'Proizvodnja VT',
+						data: prodVTValues,
+						backgroundColor: 'rgba(39, 174, 96, 0.88)',
+						stack: 'prod',
+						borderRadius: 0,
+						borderSkipped: false,
+					});
+					datasets.push({
+						label: 'Proizvodnja NT',
+						data: prodNTValues,
+						backgroundColor: 'rgba(39, 174, 96, 0.45)',
+						stack: 'prod',
+						borderRadius: { topLeft: 4, topRight: 4 },
+						borderSkipped: false,
+					});
+				} else if (prodValues.some(function(v) { return v > 0; })) {
+					datasets.push({
+						label: 'Proizvodnja',
+						data: prodValues,
+						backgroundColor: 'rgba(33, 186, 90, 0.85)',
+						borderRadius: 4,
+						borderSkipped: false,
+					});
+				}
+			} else {
+				datasets = [
+					{
+						label: withCompare ? 'Potrošnja ' + _fmtMonthLabel(month) : 'Potrošnja',
+						data: consValues,
+						backgroundColor: 'rgba(211, 54, 39, 0.85)',
+						borderRadius: 6,
+						borderSkipped: false,
+					},
+					{
+						label: withCompare ? 'Proizvodnja ' + _fmtMonthLabel(month) : 'Proizvodnja',
+						data: prodValues,
+						backgroundColor: 'rgba(33, 186, 90, 0.85)',
+						borderRadius: 6,
+						borderSkipped: false,
+					},
+				];
+				if (withCompare) {
+					datasets.push({
+						label: 'Potrošnja ' + _fmtMonthLabel(compareMonth),
+						data: cmpConsValues,
+						backgroundColor: 'rgba(211, 54, 39, 0.3)',
+						borderRadius: 6,
+						borderSkipped: false,
+					});
+					datasets.push({
+						label: 'Proizvodnja ' + _fmtMonthLabel(compareMonth),
+						data: cmpProdValues,
+						backgroundColor: 'rgba(33, 186, 90, 0.3)',
+						borderRadius: 6,
+						borderSkipped: false,
+					});
+				}
+			}
+
+			_dailyBarChart = new Chart(canvas, {
+				type: 'bar',
+				plugins: hasIcons ? [wmoIconsPlugin] : [],
+				data: { labels: days, datasets: datasets },
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					plugins: {
+						legend: { display: true, position: 'top' },
+						tooltip: { callbacks: { label: kwhLabel } }
+					},
+					scales: {
+						x: {
+							grid: { display: false },
+							ticks: {
+								padding: hasIcons ? iconSize + 6 : 4,
+								callback: function(value, index) { return String(days[index]); }
+							}
+						},
+						y: {
+							beginAtZero: true,
+							stacked: hasVTNT,
+							title: { display: true, text: 'kWh' }
+						}
+					}
+				}
+			});
+
+			_dailyBarExportFn = function() {
+				var headers, rows;
+				if (hasVTNT) {
+					headers = ['Dan', 'Potrošnja VT (kWh)', 'Potrošnja NT (kWh)', 'Potrošnja ukupno (kWh)'];
+					if (hasProdVTNT) headers.push('Proizvodnja VT (kWh)', 'Proizvodnja NT (kWh)', 'Proizvodnja ukupno (kWh)');
+					rows = [headers];
+					days.forEach(function(day, i) {
+						var row = [day, consVTValues[i], consNTValues[i], consValues[i]];
+						if (hasProdVTNT) row.push(prodVTValues[i], prodNTValues[i], prodValues[i]);
+						rows.push(row);
+					});
+				} else {
+					headers = ['Dan', 'Potrošnja (kWh)', 'Proizvodnja (kWh)'];
+					if (withCompare) headers.push('Potrošnja ' + _fmtMonthLabel(compareMonth) + ' (kWh)', 'Proizvodnja ' + _fmtMonthLabel(compareMonth) + ' (kWh)');
+					rows = [headers];
+					days.forEach(function(day, i) {
+						var row = [day, consValues[i], prodValues[i]];
+						if (withCompare) row.push(cmpConsValues[i], cmpProdValues[i]);
+						rows.push(row);
+					});
+				}
+				exportXlsx('mjerenja-dnevno-' + month + '.xlsx', rows);
+			};
+		}
+
+		document.addEventListener('DOMContentLoaded', function() {
+			document.getElementById('export-daily-bar').addEventListener('click', function() {
+				if (_dailyBarExportFn) _dailyBarExportFn();
+			});
+			document.getElementById('export-daily-bar-png').addEventListener('click', function() {
+				if (_dailyBarChart) downloadPng(_dailyBarChart.canvas, 'mjerenja-dnevno.png');
+			});
+		});
+	</script>
+}
