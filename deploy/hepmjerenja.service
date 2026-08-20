@@ -1,0 +1,80 @@
+# HEPMjerenja systemd unit.
+#
+# Install:
+#   sudo useradd --system --home-dir /opt/hepmjerenja --shell /usr/sbin/nologin hepmjerenja
+#   sudo install -d -o hepmjerenja -g hepmjerenja /opt/hepmjerenja /opt/hepmjerenja/data
+#   sudo install -o hepmjerenja -g hepmjerenja -m 755 hepmjerenja /opt/hepmjerenja/
+#   sudo install -o hepmjerenja -g hepmjerenja -m 600 config.ini /opt/hepmjerenja/
+#   sudo cp deploy/hepmjerenja.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now hepmjerenja
+#
+# config.ini is read from the working directory, and DB_PATH/LOG_DIR default to
+# paths relative to it, so WorkingDirectory below is what makes the settings file,
+# ./data/hepmjerenja.db and the log file resolve. Keep config.ini mode 600 — it
+# holds the HEP password in plain text.
+
+[Unit]
+Description=HEPMjerenja - electricity meter data collector
+Documentation=https://github.com/edkirin/hepmjerenja
+After=network-online.target
+Wants=network-online.target
+# Give up after 5 failures in 5 minutes instead of looping on a bad config.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+[Service]
+Type=simple
+User=hepmjerenja
+Group=hepmjerenja
+WorkingDirectory=/opt/hepmjerenja
+ExecStart=/opt/hepmjerenja/hepmjerenja
+
+# The app traps SIGTERM and gives Echo 5s to drain, so the default signal is
+# right; 30s leaves room for that plus the SQLite checkpoint on close.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=on-failure
+RestartSec=5s
+
+# Settings can also be supplied here instead of config.ini; real environment
+# variables take precedence over the file. Uncomment to override.
+# A port below 1024 additionally needs AmbientCapabilities=CAP_NET_BIND_SERVICE.
+#Environment=PORT=:8000
+#Environment=LOG_LEVEL=info
+#Environment=LOG_DIR=/var/log/apps/hepmjerenja
+
+# Logs go to the file in LOG_DIR; whatever reaches stdout/stderr lands in journald.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hepmjerenja
+
+# Hardening. The process only needs to write its own directory (SQLite database
+# plus the -wal/-shm sidecars, and the log file when LOG_DIR is left at default).
+# If LOG_DIR points elsewhere, add that directory to ReadWritePaths.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ReadWritePaths=/opt/hepmjerenja
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+# AF_NETLINK and AF_UNIX are what Go's resolver uses to read interfaces and talk
+# to a local nss/resolved socket; dropping them breaks DNS.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
