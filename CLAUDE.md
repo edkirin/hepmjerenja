@@ -220,6 +220,21 @@ linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64 from a
 single ubuntu runner, and publishes a GitHub release with archives and
 `SHA256SUMS`. `[skip release]` in the merge commit message skips it.
 
+The workflow ends with a second job, `back-merge`, that merges the released commit
+into `develop` and pushes it, so the branch the next feature is cut from already
+contains the release. With the repository's PR-merge (non-squash) history this is
+normally a fast-forward; it becomes a real merge commit only when `develop` moved on
+while the release ran. On conflict the job aborts the merge, leaves `develop`
+untouched and fails with an error telling the maintainer to merge by hand — the
+release itself is already published at that point, which is also why this is a
+separate job: the release job's tree is dirty (`templ generate` rewrites the tracked
+`*_templ.go` files) and its failure should not read as a release failure.
+
+Two consequences worth knowing: `[skip release]` skips the back-merge too, since a
+skipped `needs` skips the dependent job, so `develop` stays behind until the next
+real release; and a branch-protection rule on `develop` that forbids direct pushes
+would block the job, as it pushes with `GITHUB_TOKEN`.
+
 Two things the released binaries depend on:
 - `app/tzdata.go` embeds the IANA database. Without it the binary panics at init on
   any system with no `/usr/share/zoneinfo` — notably Windows.

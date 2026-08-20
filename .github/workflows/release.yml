@@ -7,7 +7,7 @@ on:
   push:
     branches: [main]
 
-# The job creates a tag and a GitHub release.
+# The jobs create a tag, a GitHub release, and push the back-merge to develop.
 permissions:
   contents: write
 
@@ -174,3 +174,54 @@ jobs:
             --notes-file notes.md
 
           echo "Released $VERSION" >>"$GITHUB_STEP_SUMMARY"
+
+  # Bring the release commit back into develop, so the next branch cut off develop
+  # already contains it and the following PR does not re-propose those changes.
+  #
+  # A separate job rather than a step in `release`, for two reasons: the release job
+  # ends with a dirty tree (`templ generate` rewrites the tracked *_templ.go files,
+  # dist/ and notes.md are left behind), which makes switching branches in that
+  # checkout unreliable; and a failure here is then plainly a back-merge failure, not
+  # a release failure — by this point the release itself is already published.
+  back-merge:
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out develop
+        uses: actions/checkout@v7
+        with:
+          ref: develop
+          # Full history: the merge needs the commits main and develop share.
+          fetch-depth: 0
+
+      - name: Merge the release commit into develop
+        env:
+          # The exact commit that was released, rather than origin/main, so the
+          # merge matches the tag even if main has moved on in the meantime.
+          RELEASED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git merge-base --is-ancestor "$RELEASED_SHA" HEAD; then
+            echo "develop already contains $RELEASED_SHA; nothing to merge."
+            echo "Back-merge: develop was already up to date." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Usually a fast-forward: main is ahead of develop only by the PR merge
+          # commit. A real merge commit is made when develop has moved on since.
+          if ! git merge --no-edit -m "Merge main back into develop" "$RELEASED_SHA"; then
+            git merge --abort || true
+            echo "::error::Cannot merge $RELEASED_SHA into develop: conflicts. The release was published; merge main into develop by hand."
+            exit 1
+          fi
+
+          # Pushed with GITHUB_TOKEN, which deliberately does not trigger further
+          # workflow runs — and this workflow only triggers on main anyway.
+          git push origin develop
+
+          echo "Back-merge: main merged into develop." >>"$GITHUB_STEP_SUMMARY"
