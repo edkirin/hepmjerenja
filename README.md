@@ -405,3 +405,13 @@ Apache licence. GitHub će je prikazati kao nestandardnu licencu.
 
 Prijave grešaka i prijedlozi dobrodošli su kroz GitHub Issues. Za promjene koda
 otvorite pull request s kratkim opisom što i zašto mijenjate.
+
+## Kontakt
+
+Autor: **Eden Kirin**
+
+- E-pošta: [edkirin@gmail.com](mailto:edkirin@gmail.com)
+- GitHub: [@edkirin](https://github.com/edkirin)
+- Repozitorij: [github.com/edkirin/hepmjerenja](https://github.com/edkirin/hepmjerenja)
+
+Za dogovor o komercijalnoj upotrebi (vidi [Licencu](#licenca)) javite se e-poštom.
