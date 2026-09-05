@@ -82,6 +82,22 @@ templ Index(p IndexProps) {
 			html.dark .widget-delta { color: #6a8aaa; }
 
 			/* Month picker */
+			/* Arrows and the picker button form one segmented control: no gap,
+			   borders shared via -1px overlap, only the outer corners rounded. */
+			.month-nav { display: inline-flex; align-items: stretch; }
+			.month-nav .month-picker-wrap { display: flex; }
+			.month-nav > * + * { margin-left: -1px; }
+			.month-step { display: flex; align-items: center; justify-content: center; width: 2.1rem; padding: 0.4rem 0; border: 1px solid #ddd; border-radius: 0; background: #fff; color: #2c3e50; font-size: 1.2rem; line-height: 1; cursor: pointer; }
+			#month-prev { border-radius: 4px 0 0 4px; }
+			#month-next { border-radius: 0 4px 4px 0; }
+			.month-nav .month-picker-btn { border-radius: 0; }
+			/* Raise whichever segment is hovered/open so its border wins the overlap. */
+			.month-step:hover:not(:disabled), .month-nav .month-picker-btn:hover, .month-nav .month-picker-btn.mp-btn-open { position: relative; z-index: 1; }
+			.month-step:hover:not(:disabled) { background: #f5f5f5; border-color: #bbb; }
+			.month-step:disabled { background: #fafafa; color: #ccc; cursor: default; }
+			html.dark .month-step { background: #16213e; border-color: #2a4a7f; color: #e0e0e0; }
+			html.dark .month-step:hover:not(:disabled) { background: #1a2a4a; border-color: #4a90d9; }
+			html.dark .month-step:disabled { background: #131c33; color: #3f5378; }
 			.month-picker-wrap { position: relative; }
 			.month-picker-btn { display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.9rem; border: 1px solid #ddd; border-radius: 4px; background: #fff; font-size: 1rem; cursor: pointer; color: #2c3e50; white-space: nowrap; }
 			.month-picker-btn:hover { background: #f5f5f5; }
@@ -177,6 +193,8 @@ templ Index(p IndexProps) {
 				}
 			</div>
 			<div class="selectors-right">
+				<div class="month-nav">
+				<button type="button" id="month-prev" class="month-step" onclick="mpStep(-1)" title="Prethodni mjesec" aria-label="Prethodni mjesec">&#8249;</button>
 				<div class="month-picker-wrap">
 					<span id="mp-data" data-selected={ p.SelectedMonth.Format("2006-01") } data-available={ AvailableMonthsJSON(p.AvailableMonths) } style="display:none"></span>
 					<button type="button" id="month-picker-btn" class="month-picker-btn" onclick="mpToggle()">
@@ -190,6 +208,8 @@ templ Index(p IndexProps) {
 						</div>
 						<div class="mp-grid" id="mp-grid"></div>
 					</div>
+				</div>
+				<button type="button" id="month-next" class="month-step" onclick="mpStep(1)" title="Sljedeći mjesec" aria-label="Sljedeći mjesec">&#8250;</button>
 				</div>
 				if len(p.AvailableMonths) > 1 {
 					<span style="color:#aaa; align-self:center; padding: 0 0.1rem;">vs</span>
@@ -271,6 +291,37 @@ templ Index(p IndexProps) {
 				if (pointEl) params.set('code', pointEl.value);
 				location.href = '/mjesecno?' + params.toString();
 			}
+
+			// Months with data, in chronological order — 'YYYY-MM' sorts as it reads.
+			var _mpSorted = Object.keys(mpAvailable).sort();
+
+			// Nearest available month before (delta < 0) or after the selected one,
+			// so the arrows skip gaps and work even if the selected month has no data.
+			function mpNeighbour(delta) {
+				if (delta < 0) {
+					for (var i = _mpSorted.length - 1; i >= 0; i--) {
+						if (_mpSorted[i] < _mpSelected) return _mpSorted[i];
+					}
+					return null;
+				}
+				for (var j = 0; j < _mpSorted.length; j++) {
+					if (_mpSorted[j] > _mpSelected) return _mpSorted[j];
+				}
+				return null;
+			}
+
+			function mpStep(delta) {
+				var key = mpNeighbour(delta);
+				if (key) mpSelect(key);
+			}
+
+			// Grey out an arrow when there is nothing to step to.
+			(function() {
+				var prev = document.getElementById('month-prev');
+				var next = document.getElementById('month-next');
+				if (prev) prev.disabled = !mpNeighbour(-1);
+				if (next) next.disabled = !mpNeighbour(1);
+			})();
 
 			function updateUrl() {
 				var params = new URLSearchParams();

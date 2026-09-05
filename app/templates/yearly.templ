@@ -36,6 +36,27 @@ templ Yearly(p YearlyProps) {
 			.selectors select { padding: 0.4rem 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 1rem; background: #fff; cursor: pointer; }
 			.selectors .point-name { font-weight: 500; }
 			.selectors .vs-sep { color: #aaa; font-size: 0.9rem; }
+			/* Year stepper — arrows and the select form one segmented control: no
+			   gap, borders shared via -1px overlap, only the outer corners rounded. */
+			.year-nav { display: inline-flex; align-items: stretch; }
+			.year-nav > * + * { margin-left: -1px; }
+			.selectors .year-nav select { border-radius: 0; }
+			.year-step { display: flex; align-items: center; justify-content: center; width: 2.1rem; padding: 0.4rem 0; border: 1px solid #ddd; border-radius: 0; background: #fff; color: #2c3e50; font-size: 1.2rem; line-height: 1; cursor: pointer; }
+			#year-prev { border-radius: 4px 0 0 4px; }
+			#year-next { border-radius: 0 4px 4px 0; }
+			/* Raise whichever segment is hovered/focused so its border wins the overlap. */
+			.year-step:hover:not(:disabled), .year-nav select:hover, .year-nav select.kbd-focus { position: relative; z-index: 1; }
+			/* A native select keeps focus after its popup closes, and Chromium matches
+			   :focus-visible on a mouse-clicked select — so the ring would stick. Hide
+			   it for mouse focus; the kbd-focus class (set in JS) brings it back for
+			   keyboard users. */
+			.year-nav select:focus { outline: none; }
+			.year-nav select.kbd-focus { outline: revert; }
+			.year-step:hover:not(:disabled) { background: #f5f5f5; border-color: #bbb; }
+			.year-step:disabled { background: #fafafa; color: #ccc; cursor: default; }
+			html.dark .year-step { background: #16213e; border-color: #2a4a7f; color: #e0e0e0; }
+			html.dark .year-step:hover:not(:disabled) { background: #1a2a4a; border-color: #4a90d9; }
+			html.dark .year-step:disabled { background: #131c33; color: #3f5378; }
 			/* Year comparison picker */
 			.yr-picker-wrap { position: relative; }
 			.yr-picker-btn { display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.9rem; border: 1px solid #ddd; border-radius: 4px; background: #fff; font-size: 1rem; cursor: pointer; color: #2c3e50; white-space: nowrap; }
@@ -130,6 +151,8 @@ html.dark .yr-picker-btn { background: #16213e; border-color: #2a4a7f; color: #e
 			</div>
 			<div class="selectors-right">
 				<label for="year-select">Godina:</label>
+				<div class="year-nav">
+				<button type="button" id="year-prev" class="year-step" onclick="yearStep(-1)" title="Prethodna godina" aria-label="Prethodna godina">&#8249;</button>
 				<select id="year-select" onchange="updateUrl()">
 					for _, y := range p.AvailableYears {
 						if y == p.SelectedYear {
@@ -139,6 +162,8 @@ html.dark .yr-picker-btn { background: #16213e; border-color: #2a4a7f; color: #e
 						}
 					}
 				</select>
+				<button type="button" id="year-next" class="year-step" onclick="yearStep(1)" title="Sljedeća godina" aria-label="Sljedeća godina">&#8250;</button>
+				</div>
 				if len(p.AvailableYears) > 1 {
 					<span class="vs-sep">vs</span>
 					<div class="yr-picker-wrap">
@@ -160,6 +185,64 @@ html.dark .yr-picker-btn { background: #16213e; border-color: #2a4a7f; color: #e
 				if (pointEl) params.set('code', pointEl.value);
 				location.href = '/godisnje?' + params.toString();
 			}
+
+			// Nearest year with data before (delta < 0) or after the selected one,
+			// read off the select so the arrows always match its options.
+			function yearNeighbour(delta) {
+				var sel = document.getElementById('year-select');
+				if (!sel) return null;
+				var years = Array.prototype.map.call(sel.options, function(o) { return parseInt(o.value); })
+					.sort(function(a, b) { return a - b; });
+				var cur = parseInt(sel.value);
+				if (delta < 0) {
+					for (var i = years.length - 1; i >= 0; i--) {
+						if (years[i] < cur) return years[i];
+					}
+					return null;
+				}
+				for (var j = 0; j < years.length; j++) {
+					if (years[j] > cur) return years[j];
+				}
+				return null;
+			}
+
+			function yearStep(delta) {
+				var year = yearNeighbour(delta);
+				if (year === null) return;
+				document.getElementById('year-select').value = String(year);
+				updateUrl();
+			}
+
+			// Grey out an arrow when there is nothing to step to.
+			(function() {
+				var prev = document.getElementById('year-prev');
+				var next = document.getElementById('year-next');
+				if (prev) prev.disabled = yearNeighbour(-1) === null;
+				if (next) next.disabled = yearNeighbour(1) === null;
+			})();
+
+			// Dismissing the select popup leaves the element focused, so give focus
+			// up on Escape or on the next interaction anywhere else on the page, and
+			// show the focus ring only when focus actually arrived from the keyboard.
+			(function() {
+				var sel = document.getElementById('year-select');
+				if (!sel) return;
+				var kbd = false;
+				document.addEventListener('keydown', function(e) {
+					if (e.key === 'Tab' || e.keyCode === 9) kbd = true;
+				}, true);
+				document.addEventListener('mousedown', function() { kbd = false; }, true);
+				sel.addEventListener('focus', function() { sel.classList.toggle('kbd-focus', kbd); });
+				sel.addEventListener('blur', function() { sel.classList.remove('kbd-focus'); });
+
+				sel.addEventListener('change', function() { sel.blur(); });
+				sel.addEventListener('keydown', function(e) {
+					if (e.key === 'Escape' || e.keyCode === 27) sel.blur();
+				});
+				document.addEventListener('mousedown', function(e) {
+					if (e.target !== sel) sel.blur();
+				});
+			})();
 		</script>
 		<p id="tariff-notice" style="display:none;font-size:0.85rem;color:#888;margin-top:-1rem;margin-bottom:2rem"></p>
 		<div class="view-toggle">
