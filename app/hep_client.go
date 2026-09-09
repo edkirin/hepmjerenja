@@ -43,7 +43,7 @@ func NewHepClient(logger zerolog.Logger) *HepClient {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		baseURL: "https://mjerenje.hep.hr/mjerenja/v1.1/api",
+		baseURL: "https://mjerenje.hep.hr/mjerenja/v1.2/api",
 		logger:  logger.With().Str("component", "hep").Logger(),
 	}
 }
@@ -225,10 +225,10 @@ func (h *HepClient) FetchReadings(ctx context.Context, token, code string, month
 		return nil, ErrUnauthorized
 	}
 
-	// Treat 404 responses that indicate permanently missing data as ErrNoDataForMonth.
+	// Treat 400 responses that indicate permanently missing data as ErrNoDataForMonth.
 	// These messages mean the metering point has no readings for this period and
 	// retrying will never help.
-	if resp.StatusCode == http.StatusNotFound {
+	if resp.StatusCode == http.StatusBadRequest {
 		body := string(respBody)
 		if strings.Contains(body, "ne sadrži podatke za datum") ||
 			strings.Contains(body, "ne ulazi u dozvoljeni raspon") {
