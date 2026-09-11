@@ -43,7 +43,7 @@ func NewHepClient(logger zerolog.Logger) *HepClient {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		baseURL: "https://mjerenje.hep.hr/mjerenja/v1.1/api",
+		baseURL: "https://mjerenje.hep.hr/mjerenja/v1.2/api",
 		logger:  logger.With().Str("component", "hep").Logger(),
 	}
 }
