@@ -179,12 +179,15 @@ on the monthly view. Nothing is persisted — there is no `last_fetch_error` col
 ## HEP API endpoints
 
 ### Login
-`POST https://mjerenje.hep.hr/mjerenja/v1/api/user/login`
-Body: `{"Username": "...", "Password": "..."}`
-Returns JWT token + KupacList with OmmList (metering points).
+`POST https://mjerenje.hep.hr/mjerenja/v1.2/api/user/login`
+Body: `{"Username": "...", "Password": "...", "Token": ""}` (`Token` is always
+empty; the browser client sends the field and so do we).
+Returns the bare KupacList array with OmmList (metering points); the JWT arrives
+as an `accessToken` Set-Cookie header, not in the body. The API version is part of
+the path and HEP retires old ones — `v1.1` now answers the login POST with 405.
 
 ### Readings
-`POST https://mjerenje.hep.hr/mjerenja/v1/api/data/omm/{code}/krivulja/mjesec/{MM}.{YYYY}/smjer/{P|R}`
+`POST https://mjerenje.hep.hr/mjerenja/v1.2/api/data/omm/{code}/krivulja/mjesec/{MM}.{YYYY}/smjer/{P|R}`
 Returns array of `{Status, Sifra, Obis, Datum, Value}`.
 
 ## Configuration

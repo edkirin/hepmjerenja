@@ -110,6 +110,9 @@ const (
 type HepLoginRequest struct {
 	Username string `json:"Username"`
 	Password string `json:"Password"`
+	// Token is always sent empty — the browser client includes the field and the
+	// API expects it in the body shape, even though it carries no value on login.
+	Token string `json:"Token"`
 }
 
 // HepLoginResponse holds the result of a successful HEP login. As of 2026,
