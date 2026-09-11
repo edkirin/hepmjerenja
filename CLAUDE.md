@@ -146,9 +146,12 @@ no metering points are known yet (the login response is what reveals them).
 ### Collection flow
 1. Get JWT from in-memory token cache, or authenticate via HEP login API
 2. Upsert metering points from login response, geocode new ones
-3. Determine months to fetch per metering point:
+3. Determine months to fetch per metering point (`getMonthsToCollect`):
    - First-time collection (NULL): backfill all months from `available_from` to now
    - Subsequent: from the last collection month to the current month
+   - The configured `FETCH_FROM` month raises that start when it is later, so a
+     first collection does not walk back through months that predate the readings
+     (HEP's `available_from` is the contract start, not the first stored month)
 4. For each metering point, fetch consumption (direction `P`) and/or production (direction `R`)
 5. Filter out future-dated readings (API returns full month including future slots)
 6. Insert with `ON CONFLICT DO NOTHING` (unique constraint handles duplicates), then
@@ -209,6 +212,7 @@ to CRLF inside the Windows archive only.
 | `DB_PATH` | SQLite database file | `./data/hepmjerenja.db` |
 | `HEP_USERNAME` | mjerenje.hep.hr username | required |
 | `HEP_PASSWORD` | mjerenje.hep.hr password | required |
+| `FETCH_FROM` | Earliest month to backfill, `YYYY-MM` | unset (no limit) |
 | `PORT` | HTTP listen address | `:8000` |
 | `LOG_DIR` | Log file directory | `.` |
 | `LOG_LEVEL` | Logging level | `info` |

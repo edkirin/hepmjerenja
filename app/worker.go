@@ -122,7 +122,7 @@ const (
 // StartManualFetchWorker consumes one-off fetch requests submitted by HTTP
 // handlers and runs a collection for each. It runs independently of the periodic
 // background worker, whose only job is scheduled collection.
-func StartManualFetchWorker(ctx context.Context, db *DB, hepClient *HepClient, cache *tokenCache, creds HepCredentials, logger zerolog.Logger, manualFetchCh <-chan ManualFetchRequest) {
+func StartManualFetchWorker(ctx context.Context, db *DB, hepClient *HepClient, cache *tokenCache, creds HepCredentials, fetchFrom *time.Time, logger zerolog.Logger, manualFetchCh <-chan ManualFetchRequest) {
 	log := logger.With().Str("component", "manual-fetch").Logger()
 
 	for {
@@ -140,7 +140,7 @@ func StartManualFetchWorker(ctx context.Context, db *DB, hepClient *HepClient, c
 			}
 			log.Info().Time("ref_time", refTime).Msg("manual fetch triggered")
 			go func(resultCh chan error, refTime time.Time) {
-				err := runCollection(ctx, db, hepClient, cache, creds, modeAll, true, refTime, log)
+				err := runCollection(ctx, db, hepClient, cache, creds, modeAll, true, refTime, fetchFrom, log)
 				if err != nil {
 					log.Error().Err(err).Msg("manual fetch failed")
 				}
@@ -164,7 +164,7 @@ func StartManualFetchWorker(ctx context.Context, db *DB, hepClient *HepClient, c
 //
 // The token cache persists across ticks. The function blocks until ctx is
 // cancelled (application shutdown).
-func StartWorker(ctx context.Context, db *DB, hepClient *HepClient, cache *tokenCache, creds HepCredentials, logger zerolog.Logger) {
+func StartWorker(ctx context.Context, db *DB, hepClient *HepClient, cache *tokenCache, creds HepCredentials, fetchFrom *time.Time, logger zerolog.Logger) {
 	log := logger.With().Str("component", "worker").Logger()
 
 	ticker := time.NewTicker(1 * time.Minute)
@@ -187,7 +187,7 @@ func StartWorker(ctx context.Context, db *DB, hepClient *HepClient, cache *token
 
 	// Run immediately on start: discover metering points and backfill anything
 	// that has never been collected.
-	runAndReport(ctx, db, hepClient, cache, creds, modePending, true, log)
+	runAndReport(ctx, db, hepClient, cache, creds, modePending, true, fetchFrom, log)
 
 	for {
 		select {
@@ -198,8 +198,8 @@ func StartWorker(ctx context.Context, db *DB, hepClient *HepClient, cache *token
 		case <-ticker.C:
 			// Every minute: backfill points that have never been collected, then
 			// re-collect stale ones. Neither contacts HEP when there is no work.
-			runAndReport(ctx, db, hepClient, cache, creds, modePending, false, log)
-			runAndReport(ctx, db, hepClient, cache, creds, modeStale, false, log)
+			runAndReport(ctx, db, hepClient, cache, creds, modePending, false, fetchFrom, log)
+			runAndReport(ctx, db, hepClient, cache, creds, modeStale, false, fetchFrom, log)
 
 			// Daily: refresh current-month data for every metering point.
 			// The date guard ensures this runs at most once per calendar day.
@@ -209,7 +209,7 @@ func StartWorker(ctx context.Context, db *DB, hepClient *HepClient, cache *token
 			if isCollectionTime && today != lastDailyDate {
 				lastDailyDate = today
 				log.Info().Str("date", today).Msg("running daily collection")
-				runAndReport(ctx, db, hepClient, cache, creds, modeAll, true, log)
+				runAndReport(ctx, db, hepClient, cache, creds, modeAll, true, fetchFrom, log)
 			}
 		}
 	}
@@ -218,8 +218,8 @@ func StartWorker(ctx context.Context, db *DB, hepClient *HepClient, cache *token
 // runAndReport runs a collection and records the outcome in FetchState so the
 // web interface can show the last failure. refTime is always yesterday: readings
 // are finalized with a delay, so the previous day is the newest useful reference.
-func runAndReport(ctx context.Context, db *DB, hepClient *HepClient, cache *tokenCache, creds HepCredentials, mode collectMode, discover bool, log zerolog.Logger) {
-	err := runCollection(ctx, db, hepClient, cache, creds, mode, discover, time.Now().AddDate(0, 0, -1), log)
+func runAndReport(ctx context.Context, db *DB, hepClient *HepClient, cache *tokenCache, creds HepCredentials, mode collectMode, discover bool, fetchFrom *time.Time, log zerolog.Logger) {
+	err := runCollection(ctx, db, hepClient, cache, creds, mode, discover, time.Now().AddDate(0, 0, -1), fetchFrom, log)
 	if err != nil {
 		log.Error().Err(err).Msg("collection failed")
 	}
@@ -237,7 +237,7 @@ func runAndReport(ctx context.Context, db *DB, hepClient *HepClient, cache *toke
 //
 // Returns an error only when the whole run could not proceed (login failure or a
 // database error); per-point failures are logged and skipped.
-func runCollection(ctx context.Context, db *DB, hepClient *HepClient, cache *tokenCache, creds HepCredentials, mode collectMode, discover bool, refTime time.Time, log zerolog.Logger) error {
+func runCollection(ctx context.Context, db *DB, hepClient *HepClient, cache *tokenCache, creds HepCredentials, mode collectMode, discover bool, refTime time.Time, fetchFrom *time.Time, log zerolog.Logger) error {
 	if !creds.IsSet() {
 		return fmt.Errorf("HEP credentials are not configured (set HEP_USERNAME and HEP_PASSWORD)")
 	}
@@ -294,7 +294,7 @@ func runCollection(ctx context.Context, db *DB, hepClient *HepClient, cache *tok
 			wg.Add(1)
 			go func(p MeteringPoint) {
 				defer wg.Done()
-				if err := collectForMeteringPoint(ctx, db, hepClient, cache, creds, p, log, refTime); err != nil {
+				if err := collectForMeteringPoint(ctx, db, hepClient, cache, creds, p, refTime, fetchFrom, log); err != nil {
 					errMu.Lock()
 					errs = append(errs, fmt.Errorf("metering point %s: %w", p.Code, err))
 					failed++
@@ -400,70 +400,74 @@ type monthYear struct {
 // up to the current month — a full historical backfill. Otherwise it returns all
 // months from the last collection month up to the current month so that any
 // readings published late (e.g. end-of-month data) are always picked up.
-func getMonthsToCollect(point MeteringPoint, refTime time.Time) []monthYear {
+//
+// fetchFrom, when non-nil, raises the first month to collect: HEP's available_from
+// is the start of the contract, not of the stored measurements, so without the cap
+// a first collection walks back years before the first month that actually has
+// data and issues a doomed API call for every one of them.
+func getMonthsToCollect(point MeteringPoint, refTime time.Time, fetchFrom *time.Time) []monthYear {
 	now := refTime
 	currentMonth := monthYear{Month: int(now.Month()), Year: now.Year()}
 
-	if point.LastMeterReadingCollection != nil {
-		last := *point.LastMeterReadingCollection
-		lastMonth := monthYear{Month: int(last.Month()), Year: last.Year()}
-
-		// Last collection is at or after the reference month — just fetch the reference
-		// month. Covers the normal same-month case and the manual-fetch case where
-		// refTime is yesterday but the DB already has a collection from today.
-		lastAfterRef := lastMonth.Year > currentMonth.Year ||
-			(lastMonth.Year == currentMonth.Year && lastMonth.Month >= currentMonth.Month)
-		if lastAfterRef {
-			return []monthYear{currentMonth}
-		}
-
-		// Last collection was in a previous month: re-fetch from that month forward
-		// so that any readings published after that run (e.g. end-of-month data) are caught.
-		var months []monthYear
-		cursor := last
-		for {
-			m := monthYear{Month: int(cursor.Month()), Year: cursor.Year()}
-			months = append(months, m)
-			if m == currentMonth {
-				break
-			}
-			cursor = time.Date(cursor.Year(), cursor.Month()+1, 1, 0, 0, 0, 0, cursor.Location())
-			if cursor.After(now) {
-				break
-			}
-		}
-		return months
+	var earliest *monthYear
+	if fetchFrom != nil {
+		earliest = &monthYear{Month: int(fetchFrom.Month()), Year: fetchFrom.Year()}
 	}
 
-	// First-time collection: backfill from the metering point's available_from date.
-	// If available_from is not set, fall back to the current month only.
-	if point.AvailableFrom == nil {
+	// start is the earliest month worth fetching for this point: the last
+	// collection month for a known point, available_from for a new one, or the
+	// reference month when neither is known.
+	var start monthYear
+	switch {
+	case point.LastMeterReadingCollection != nil:
+		last := *point.LastMeterReadingCollection
+		start = monthYear{Month: int(last.Month()), Year: last.Year()}
+		// Last collection is at or after the reference month — just fetch the
+		// reference month. Covers the normal same-month case and the manual-fetch
+		// case where refTime is yesterday but the DB already has a collection from today.
+		if !monthBefore(start, currentMonth) {
+			start = currentMonth
+		}
+	case point.AvailableFrom != nil:
+		start = monthYear{Month: int(point.AvailableFrom.Month()), Year: point.AvailableFrom.Year()}
+	default:
+		start = currentMonth
+	}
+
+	// Apply the configured earliest-fetch cap.
+	if earliest != nil && monthBefore(start, *earliest) {
+		start = *earliest
+	}
+
+	// start at the reference month means only that month is outstanding. If the cap
+	// is set past the reference month there is nothing valid to fetch yet.
+	if !monthBefore(start, currentMonth) {
+		if monthBefore(currentMonth, start) {
+			return nil
+		}
 		return []monthYear{currentMonth}
 	}
 
+	// Walk month by month from start up to and including the reference month.
 	var months []monthYear
-	cursor := *point.AvailableFrom
-
-	// Iterate month by month from available_from until we reach or pass the current month.
+	cursor := time.Date(start.Year, time.Month(start.Month), 1, 0, 0, 0, 0, now.Location())
 	for {
 		m := monthYear{Month: int(cursor.Month()), Year: cursor.Year()}
 		months = append(months, m)
-
-		// Stop once we've reached the current month.
-		if m.Year == currentMonth.Year && m.Month == currentMonth.Month {
+		if m == currentMonth {
 			break
 		}
-
-		// Advance to the first day of the next month.
-		cursor = time.Date(cursor.Year(), cursor.Month()+1, 1, 0, 0, 0, 0, cursor.Location())
-
-		// Safety: stop if we've gone past the current month (shouldn't happen, but just in case).
-		if cursor.After(now) {
-			break
-		}
+		cursor = cursor.AddDate(0, 1, 0)
 	}
-
 	return months
+}
+
+// monthBefore reports whether a is strictly earlier than b.
+func monthBefore(a, b monthYear) bool {
+	if a.Year != b.Year {
+		return a.Year < b.Year
+	}
+	return a.Month < b.Month
 }
 
 // collectForMeteringPoint fetches all required months of readings for a single
@@ -472,11 +476,11 @@ func getMonthsToCollect(point MeteringPoint, refTime time.Time) []monthYear {
 // It returns an error when any month failed; in that case
 // last_meter_reading_collection is left untouched so the next run retries the
 // point instead of treating the gap as collected.
-func collectForMeteringPoint(ctx context.Context, db *DB, hepClient *HepClient, cache *tokenCache, creds HepCredentials, point MeteringPoint, log zerolog.Logger, refTime time.Time) error {
+func collectForMeteringPoint(ctx context.Context, db *DB, hepClient *HepClient, cache *tokenCache, creds HepCredentials, point MeteringPoint, refTime time.Time, fetchFrom *time.Time, log zerolog.Logger) error {
 	start := time.Now()
 	log.Info().Str("code", point.Code).Msg("collecting metering point")
 
-	months := getMonthsToCollect(point, refTime)
+	months := getMonthsToCollect(point, refTime, fetchFrom)
 
 	if len(months) == 0 {
 		log.Info().Str("code", point.Code).Msg("nothing to fetch")

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -36,6 +37,17 @@ type Config struct {
 	// to the installation, not to an account in the database.
 	HepUsername string
 	HepPassword string
+
+	// FetchFrom is the earliest month the worker will backfill from. HEP's
+	// MjesecOd (available_from) is the start of the contract, not of the stored
+	// measurements, so a first collection can otherwise walk back years before
+	// the first month that actually has data. nil means no cap — backfill from
+	// available_from as before.
+	FetchFrom *time.Time
+
+	// FetchFromError is set when FETCH_FROM is present but not a valid YYYY-MM.
+	// main() logs it; the cap is simply left disabled.
+	FetchFromError error
 
 	// SQLEcho, when true, prints every SQL query and its arguments to stdout.
 	// Intended for local debugging only — output goes directly to the console,
@@ -79,6 +91,18 @@ func LoadConfig() Config {
 
 	if cfg.DBPath == "" {
 		cfg.DBPath = defaultDBPath
+	}
+
+	// FETCH_FROM caps how far back a first collection walks. Accept the
+	// convenient YYYY-MM form; anything else is reported instead of silently
+	// disabling the cap, because that would resurface the very backfill the
+	// setting exists to avoid.
+	if raw := strings.TrimSpace(os.Getenv("FETCH_FROM")); raw != "" {
+		if t, err := time.Parse("2006-01", raw); err != nil {
+			cfg.FetchFromError = fmt.Errorf("FETCH_FROM=%q is not a valid month, expected YYYY-MM (e.g. 2025-07)", raw)
+		} else {
+			cfg.FetchFrom = &t
+		}
 	}
 
 	if cfg.LogLevel == "" {
