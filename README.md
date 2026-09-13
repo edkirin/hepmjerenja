@@ -160,11 +160,19 @@ starija `.env` datoteka.
 | `HEP_USERNAME` | Korisničko ime za mjerenje.hep.hr | obavezno |
 | `HEP_PASSWORD` | Lozinka za mjerenje.hep.hr | obavezno |
 | `DB_PATH` | Datoteka SQLite baze | `./data/hepmjerenja.db` |
+| `FETCH_FROM` | Najraniji mjesec koji se povlači, u obliku `YYYY-MM` | bez ograničenja |
 | `PORT` | Adresa na kojoj poslužitelj sluša | `:8000` |
 | `LOG_DIR` | Direktorij za datoteke dnevnika | `.` |
 | `LOG_LEVEL` | Razina zapisivanja (`debug`, `info`, `warn`, `error`) | `info` |
 | `SQL_ECHO` | Ispis svih SQL upita na stdout (`true`/`false`) | `false` |
 | `DEBUG` | Isključuje minifikaciju HTML/CSS/JS | `false` |
+
+`FETCH_FROM` rješava čest slučaj kod prvog pokretanja: HEP kao `MjesecOd`
+(available_from) vraća početak ugovora, a ne mjesec od kojeg stvarno postoje
+očitanja. Bez ograničenja aplikacija tada mjesec po mjesec dohvaća godine unatrag
+i za svaki dobiva odgovor „nema podataka". Postavite npr. `FETCH_FROM=2025-07` na
+prvi mjesec s očitanjima i prazni se mjeseci preskaču. Ako je vrijednost neispravna
+(nije `YYYY-MM`), aplikacija to zapiše u dnevnik i nastavi bez ograničenja.
 
 ### Sigurnosno upozorenje
 

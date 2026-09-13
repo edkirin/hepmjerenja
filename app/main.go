@@ -67,6 +67,12 @@ func main() {
 		logger.Info().Strs("looked_for", configFiles).Msg("No settings file found; using environment variables only")
 	}
 
+	if cfg.FetchFromError != nil {
+		logger.Error().Err(cfg.FetchFromError).Msg("Invalid FETCH_FROM setting; fetching from available_from instead")
+	} else if cfg.FetchFrom != nil {
+		logger.Info().Time("fetch_from", *cfg.FetchFrom).Msg("Backfill will not go earlier than FETCH_FROM")
+	}
+
 	// Create a root context that is automatically cancelled when the process
 	// receives SIGINT (Ctrl+C) or SIGTERM (e.g. from Docker/systemd).
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -107,10 +113,10 @@ func main() {
 	// The manual-fetch consumer always runs so the "Osvježi podatke" button works
 	// even when the periodic background worker is disabled (the worker only handles
 	// scheduled collection).
-	go StartManualFetchWorker(ctx, db, hepClient, tokens, creds, workerLogger, manualFetchCh)
+	go StartManualFetchWorker(ctx, db, hepClient, tokens, creds, cfg.FetchFrom, workerLogger, manualFetchCh)
 
 	// Start the periodic background worker in a separate goroutine.
-	go StartWorker(ctx, db, hepClient, tokens, creds, workerLogger)
+	go StartWorker(ctx, db, hepClient, tokens, creds, cfg.FetchFrom, workerLogger)
 
 	// Handler with shared dependencies.
 	h := &Handler{

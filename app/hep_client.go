@@ -225,19 +225,18 @@ func (h *HepClient) FetchReadings(ctx context.Context, token, code string, month
 		return nil, ErrUnauthorized
 	}
 
-	// Treat 404 responses that indicate permanently missing data as ErrNoDataForMonth.
+	// Treat responses that indicate permanently missing data as ErrNoDataForMonth.
 	// These messages mean the metering point has no readings for this period and
-	// retrying will never help.
-	if resp.StatusCode == http.StatusNotFound {
+	// retrying will never help. HEP uses 400 for one metering point and 404 for
+	// another depending on its history, so the body — not the status code — is
+	// what decides.
+	if resp.StatusCode != http.StatusOK {
 		body := string(respBody)
 		if strings.Contains(body, "ne sadrži podatke za datum") ||
 			strings.Contains(body, "ne ulazi u dozvoljeni raspon") {
 			return nil, ErrNoDataForMonth
 		}
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("readings request failed: status=%d url=%s body=%s", resp.StatusCode, url, string(respBody))
+		return nil, fmt.Errorf("readings request failed: status=%d url=%s body=%s", resp.StatusCode, url, body)
 	}
 
 	var readings []HepReading

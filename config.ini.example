@@ -16,6 +16,13 @@ DB_PATH=./data/hepmjerenja.db
 HEP_USERNAME=
 HEP_PASSWORD=
 
+# ── Collection ───────────────────────────────────────────────────────────────
+# Earliest month to backfill (YYYY-MM). HEP reports the contract start as a
+# metering point's available_from, which can be years before the first month
+# that actually has readings. Set this to that first month so the initial
+# backfill does not spend a long time on empty months. Empty means no limit.
+FETCH_FROM=
+
 # ── Server ───────────────────────────────────────────────────────────────────
 PORT=:8000
 LOG_DIR=.
